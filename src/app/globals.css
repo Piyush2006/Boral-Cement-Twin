@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/**
+ * Industrial digital-twin surface (§14). Dark, plant-first, minimal chrome.
+ * The map and the 3D scene are the hero; panels are quiet and translucent.
+ */
+
+/**
+ * Palette.
+ *
+ * Dark is the default — this is a control-room application. Light mode
+ * overrides the same token values under `[data-theme="light"]`, so every
+ * utility class (`bg-panel`, `text-ink`…) follows the theme without any
+ * component knowing which one is active.
+ *
+ * Surfaces used inside inline style strings (Leaflet marker HTML, the twin's
+ * DOM cards) reference the `--surface-*` variables below for the same reason.
+ */
+
+@theme {
+  --color-bg: #080b10;
+  --color-panel: #10151d;
+  --color-panel-2: #161d27;
+  --color-line: #232c39;
+  --color-line-2: #33404f;
+
+  --color-ink: #e9eef5;
+  --color-ink-2: #a2aebd;
+  --color-ink-3: #8a97a8;
+
+  --color-accent: #38bdf8;
+  --color-accent-dim: #0e3a52;
+  /* Label colour ON an accent fill — white on light blue fails contrast. */
+  --color-accent-ink: #04212e;
+
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-crit: #f87171;
+  --color-offline: #7c8695;
+  --color-verify: #c084fc;
+
+  --color-demo: #f59e0b;
+
+  --color-pile: #eab308;
+  --color-process: #f472b6;
+  --color-grind: #4ade80;
+  --color-storage: #60a5fa;
+  --color-utility: #c084fc;
+  --color-quarry: #fb7185;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Floating surfaces over the map and the 3D scene. */
+  --surface-float: rgba(10, 15, 24, 0.9);
+  --surface-float-solid: rgba(9, 14, 24, 0.95);
+  --surface-border: rgba(255, 255, 255, 0.14);
+  --surface-ink: #eef3f9;
+  --surface-ink-dim: rgba(255, 255, 255, 0.62);
+  --surface-shadow: rgba(0, 0, 0, 0.55);
+  --map-backdrop: #0b0f15;
+  /* Faint fill inside floating cards, and the ring on a selected marker. */
+  --surface-tint: rgba(255, 255, 255, 0.06);
+  --surface-ring: rgba(255, 255, 255, 0.85);
+}
+
+/**
+ * Light mode. Token values change; class names do not.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg: #f1f4f9;
+  --color-panel: #ffffff;
+  --color-panel-2: #f3f6fa;
+  --color-line: #dde3ec;
+  --color-line-2: #c4cddb;
+
+  --color-ink: #0f1720;
+  --color-ink-2: #47566a;
+  --color-ink-3: #5c6b7f;
+
+  --color-accent: #1d5fbe;
+  --color-accent-dim: #dbeafe;
+  --color-accent-ink: #ffffff;
+
+  --color-ok: #128a53;
+  --color-warn: #a76a00;
+  --color-crit: #c0392b;
+  --color-offline: #7c8695;
+  --color-verify: #7c3aed;
+
+  --color-demo: #b45309;
+
+  --surface-float: rgba(255, 255, 255, 0.94);
+  --surface-float-solid: rgba(255, 255, 255, 0.97);
+  --surface-border: rgba(15, 23, 32, 0.14);
+  --surface-ink: #0f1720;
+  --surface-ink-dim: rgba(15, 23, 32, 0.62);
+  --surface-shadow: rgba(15, 23, 32, 0.22);
+  --map-backdrop: #e6ebf2;
+  --surface-tint: rgba(15, 23, 32, 0.05);
+  --surface-ring: rgba(15, 23, 32, 0.75);
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Leaflet, themed to the twin rather than its stock chrome. leaflet.css is
+   imported from a client chunk and lands after this file, hence !important. */
+.leaflet-container {
+  background: var(--map-backdrop) !important;
+  font-family: inherit;
+  outline: none;
+}
+.leaflet-control-attribution {
+  background: var(--surface-float) !important;
+  color: var(--color-ink-3) !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+}
+.leaflet-control-attribution a {
+  color: var(--color-ink-2) !important;
+}
+
+.twin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.twin-scroll::-webkit-scrollbar-thumb {
+  background: #26303d;
+  border-radius: 4px;
+}
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+.flow-line {
+  animation: flow-dash 1.4s linear infinite;
+}
