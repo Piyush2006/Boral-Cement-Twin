@@ -34,7 +34,7 @@ type Item = {
 
 export const NAV: Item[] = [
   { id: "twin", label: "Digital Twin", icon: "map", mode: "twin", owns: TWIN_MODES },
-  { id: "inventory", label: "Inventory", icon: "box", mode: "inventory" },
+  { id: "reports", label: "Dashboard", icon: "chart", mode: "reports" },
   {
     id: "master",
     label: "Master",
@@ -44,9 +44,9 @@ export const NAV: Item[] = [
       { label: "Materials + Grades", mode: "master-materials" },
     ],
   },
+  { id: "inventory", label: "Inventory", icon: "box", mode: "inventory" },
   { id: "incoming", label: "Incoming", icon: "truck", mode: "incoming" },
   { id: "issues", label: "Issue & Consumption", icon: "arrow", mode: "issues" },
-  { id: "reports", label: "Reports & Insights", icon: "chart", mode: "reports" },
 ]
 
 const S = 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"'

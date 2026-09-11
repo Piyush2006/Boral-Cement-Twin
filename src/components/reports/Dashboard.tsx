@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Inventory dashboard — the first view of Reports & Insights.
+ * Inventory dashboard — the first view of the Dashboard module.
  *
  *   KPI row            total inventory, value, materials, locations,
  *                      critical items, pending test lots

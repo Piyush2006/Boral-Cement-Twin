@@ -386,7 +386,7 @@ function MaterialOptions({ draft, set }: { draft: MaterialDraft; set: (patch: Pa
           checked={draft.criticalSpare}
           onChange={(v) => set({ criticalSpare: v })}
           label="Critical spare"
-          note="Watched for availability in Reports & Insights."
+          note="Watched for availability on the Dashboard."
         />
       )}
     </details>

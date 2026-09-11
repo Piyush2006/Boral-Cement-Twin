@@ -555,7 +555,7 @@ export function ConsumptionModal({
               <p className="-mt-1 mb-3 text-[11px] text-ink-3">
                 {CONSUMPTION_CATEGORY_META[category].description}.
                 {CONSUMPTION_CATEGORY_META[category].productive
-                  ? " Counted as consumption in Reports & Insights."
+                  ? " Counted as consumption on the Dashboard."
                   : ` An exception outcome — posts as a ${transactionLabel(consumptionTransactionType(category))} transaction and counts as a loss, not as production.`}
               </p>
               {category === "SPARE" && material?.unitCost !== undefined && quantity !== null && (

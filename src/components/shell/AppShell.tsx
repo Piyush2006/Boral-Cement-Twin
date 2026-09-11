@@ -39,7 +39,7 @@ const MasterScreen = dynamic(
 
 const ReportsScreen = dynamic(
   () => import("@/components/reports/ReportsScreen").then((m) => m.ReportsScreen),
-  { ssr: false, loading: () => <Loading label="Loading reports & insights…" /> },
+  { ssr: false, loading: () => <Loading label="Loading dashboard…" /> },
 )
 
 const DigitalTwinView = dynamic(

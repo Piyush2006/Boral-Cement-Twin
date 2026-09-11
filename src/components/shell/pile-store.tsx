@@ -53,7 +53,7 @@ import { SILO_SEED, type SiloRecord } from "@/lib/inventory/silo-inventory"
 
 /**
  * Where the application is: the three Digital Twin views, the operational
- * modules, the two Master sections, and Reports & Insights.
+ * modules, the two Master sections, and the Dashboard.
  */
 export type MapMode =
   | "satellite"

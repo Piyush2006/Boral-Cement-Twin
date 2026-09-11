@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Reports & Insights — readiness, cost, quality, expiry, maintenance and
+ * Dashboard (Reports & Insights) — readiness, cost, quality, expiry, maintenance and
  * utilisation, for plant users and management.
  *
  *   What came in?          Material Inward, Quality
@@ -175,7 +175,7 @@ export function ReportsScreen() {
         <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
           {section === "dashboard" ? (
             <div>
-              <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink-3">Reports &amp; Insights</div>
+              <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink-3">Dashboard</div>
               <h1 className="text-[22px] font-bold text-ink">{greeting(now)}</h1>
               <p className="max-w-[760px] text-[12.5px] text-ink-3">
                 Here&rsquo;s the latest view of your inventory at Berrima Cement Works. Figures are Demo / Simulated until the plant systems
@@ -184,6 +184,7 @@ export function ReportsScreen() {
             </div>
           ) : (
             <div>
+              <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink-3">Dashboard</div>
               <h1 className="text-[20px] font-bold text-ink">Reports &amp; Insights</h1>
               <p className="max-w-[760px] text-[12px] text-ink-3">
                 Readiness, cost, quality, expiry, maintenance and utilisation — derived live from inventory, incoming and issue records.

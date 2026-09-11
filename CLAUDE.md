@@ -1402,6 +1402,11 @@ above, **these are current**. The earlier text is kept for its reasoning.
     example (SRF, 75 MT, expiry 25 Oct 2026). Spares are counted, not weighed:
     Incoming uses the material's UOM, and two configured spare POs (PO-10305
     lubricant with a 540-day shelf life, PO-10306 bearings) exercise it.
+15. **Menu order and naming** (user request, 2026-09-11; supersedes the order
+    in decision 1): Digital Twin · Dashboard · Master (Locations ·
+    Materials + Grades) · Inventory · Incoming · Issue & Consumption.
+    "Dashboard" is the sidebar name of Reports & Insights — the same screen,
+    opening on the inventory dashboard with the report sections as its tabs.
 11. **One source of truth, checked end to end.** Every quantity on every
     screen — Inventory, Transactions, the map and 3D cards, Plant Flow and
     Reports — is derived from the inventory records and the ledger in
