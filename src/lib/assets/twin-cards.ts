@@ -10,8 +10,6 @@
  * twin running; the legend and footer both say the data is simulated.
  */
 
-import type { LatLng } from "@/lib/map/projection"
-
 export type Health = "NORMAL" | "WARNING" | "CRITICAL" | "OFFLINE"
 
 export type CardRow = {
@@ -35,7 +33,6 @@ export type TwinCard = {
   /** Equipment tag shown under the title, e.g. CR-01. */
   tag?: string
   icon: IconKey
-  position: LatLng
   side: "left" | "right"
   slot: number
   /** Preferred offset of the card from its anchor, in screen pixels. */
@@ -93,7 +90,6 @@ export const HEALTH_LABEL: Record<Health, string> = {
 export const TWIN_CARDS: TwinCard[] = [
   {
     id: "PILE-RM-01", no: "01", title: "Raw Material Pile 1", subtitle: "(Limestone)", icon: "pile",
-    position: { lat: -34.507570, lng: 150.327900 },
     side: "left", slot: 0.0, offset: [-150, -120], health: "WARNING", lift: 26,
     rows: [
       { label: "Qty", value: "18,450 MT", dot: "WARNING" },
@@ -102,7 +98,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "PILE-RM-02", no: "02", title: "Raw Material Pile 2", subtitle: "(Clay / Shale)", icon: "pile",
-    position: { lat: -34.507760, lng: 150.329560 },
     side: "left", slot: 0.0, offset: [-40, -150], health: "NORMAL", lift: 24,
     rows: [
       { label: "Qty", value: "7,860 MT", dot: "WARNING" },
@@ -111,7 +106,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "CR-01", no: "06", title: "Primary Crusher", tag: "CR-01", icon: "crusher",
-    position: { lat: -34.509651, lng: 150.334403 },
     side: "left", slot: 0.16, offset: [-70, -120], health: "NORMAL", lift: 42,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL" },
@@ -120,7 +114,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "PILE-COAL", no: "04", title: "Coal Pile", icon: "pile", headline: "5,670 MT",
-    position: { lat: -34.512500, lng: 150.338250 },
     side: "left", slot: 0.33, offset: [-190, -60], health: "WARNING", lift: 24,
     rows: [
       { label: "Warning", value: "2", dot: "WARNING" },
@@ -129,7 +122,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "PILE-AF", no: "03", title: "Alternate Fuel (AF) Pile", icon: "pile", headline: "3,280 MT",
-    position: { lat: -34.510850, lng: 150.330050 },
     side: "left", slot: 0.58, offset: [-170, 30], health: "NORMAL", lift: 24,
     rows: [
       { label: "Warning", value: "0", dot: "WARNING" },
@@ -138,7 +130,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "PILE-RM-07", no: "05", title: "Raw Mix / Blended Pile", icon: "pile", headline: "22,940 MT",
-    position: { lat: -34.512700, lng: 150.331200 },
     side: "left", slot: 0.76, offset: [-60, 90], health: "WARNING", lift: 26,
     rows: [
       { label: "Warning", value: "3", dot: "WARNING" },
@@ -147,7 +138,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "RM-01", no: "07", title: "Raw Mill", tag: "RM-01", icon: "mill",
-    position: { lat: -34.510535, lng: 150.335798 },
     side: "left", slot: 0.24, offset: [-30, -110], health: "NORMAL", lift: 32,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL" },
@@ -156,7 +146,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "GEO-01", no: "08", title: "Geocycle Co-processing", subtitle: "Facility (AF & Waste)", icon: "geocycle",
-    position: { lat: -34.509900, lng: 150.336900 },
     side: "right", slot: 0.0, offset: [10, -170], health: "NORMAL", lift: 40,
     rows: [
       { label: "Status", value: "Operational", tone: "NORMAL" },
@@ -166,7 +155,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "SL-GRP", no: "11", title: "Cement Silos", icon: "silo",
-    position: { lat: -34.511176, lng: 150.339312 },
     side: "right", slot: 0.02, offset: [-60, -160], health: "NORMAL", lift: 82,
     rows: [],
     silos: [
@@ -177,7 +165,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "KLN-01", no: "09", title: "Kiln", tag: "KLN-01", icon: "kiln",
-    position: { lat: -34.511196, lng: 150.337010 },
     side: "right", slot: 0.26, offset: [60, -140], health: "WARNING", lift: 38,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL", dot: "WARNING" },
@@ -188,7 +175,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "PK-01", no: "12", title: "Cement Packing", tag: "PK-01", icon: "packing",
-    position: { lat: -34.512259, lng: 150.336549 },
     side: "right", slot: 0.26, offset: [170, -70], health: "NORMAL", lift: 30,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL" },
@@ -197,7 +183,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "UT-01", no: "13", title: "Utilities", subtitle: "(Compressor & Power)", icon: "utility",
-    position: { lat: -34.511614, lng: 150.341248 },
     side: "right", slot: 0.5, offset: [150, -60], health: "NORMAL", lift: 26,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL" },
@@ -207,7 +192,6 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "CC-01", no: "10", title: "Clinker Cooler", tag: "CC-01", icon: "cooler",
-    position: { lat: -34.511110, lng: 150.337783 },
     side: "right", slot: 0.63, offset: [60, 60], health: "NORMAL", lift: 44,
     rows: [
       { label: "Status", value: "Running", tone: "NORMAL" },
@@ -217,16 +201,11 @@ export const TWIN_CARDS: TwinCard[] = [
   },
   {
     id: "BYPASS-DUST", no: "15", title: "Kiln By-pass Dust Pile", icon: "pile",
-    position: { lat: -34.512100, lng: 150.338900 },
     side: "right", slot: 0.84, offset: [30, 90], health: "WARNING", lift: 20,
-    rows: [
-      { label: "Status", value: "", dot: "WARNING" },
-      { label: "Qty", value: "120 MT", dot: "WARNING" },
-    ],
+    rows: [{ label: "Inventory", value: "Not tracked" }],
   },
   {
     id: "ADMIN-01", no: "14", title: "Admin & Labs", icon: "admin",
-    position: { lat: -34.507140, lng: 150.338566 },
     side: "right", slot: 0.86, offset: [110, 20], health: "NORMAL", lift: 22,
     rows: [{ label: "Status", value: "Operational", tone: "NORMAL" }],
   },

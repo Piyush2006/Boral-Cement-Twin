@@ -2,14 +2,11 @@
 
 import dynamic from "next/dynamic"
 
-import { RecordStock } from "@/components/inventory/RecordStock"
-import {
-  ApproximateNote,
-  AssetTypeLegend,
-  LiveInventoryCard,
-  MapChrome,
-} from "@/components/map/SatelliteChrome"
-import { PileProvider, usePiles } from "./pile-store"
+import { IncomingProvider } from "@/components/incoming/incoming-store"
+import { IssueProvider } from "@/components/issues/issue-store"
+import { LiveInventoryCard, MapChrome } from "@/components/map/SatelliteChrome"
+import { PileProvider, masterSection, usePiles } from "./pile-store"
+import { Sidebar } from "./Sidebar"
 import { TopBar } from "./TopBar"
 import { TwinProvider } from "./twin-store"
 
@@ -25,14 +22,24 @@ const IncomingScreen = dynamic(
   { ssr: false, loading: () => <Loading label="Loading incoming materials…" /> },
 )
 
+const IssueScreen = dynamic(
+  () => import("@/components/issues/IssueScreen").then((m) => m.IssueScreen),
+  { ssr: false, loading: () => <Loading label="Loading issue & consumption…" /> },
+)
+
 const InventoryScreen = dynamic(
   () => import("@/components/inventory/InventoryScreen").then((m) => m.InventoryScreen),
   { ssr: false, loading: () => <Loading label="Loading inventory…" /> },
 )
 
-const PlantFlowView = dynamic(
-  () => import("@/components/twin/PlantFlowView").then((m) => m.PlantFlowView),
-  { ssr: false, loading: () => <Loading label="Loading plant flow…" /> },
+const MasterScreen = dynamic(
+  () => import("@/components/masters/MasterScreen").then((m) => m.MasterScreen),
+  { ssr: false, loading: () => <Loading label="Loading master data…" /> },
+)
+
+const ReportsScreen = dynamic(
+  () => import("@/components/reports/ReportsScreen").then((m) => m.ReportsScreen),
+  { ssr: false, loading: () => <Loading label="Loading reports & insights…" /> },
 )
 
 const DigitalTwinView = dynamic(
@@ -45,7 +52,14 @@ export function AppShell() {
     <PileProvider>
       {/* The 3D view renders the full plant asset model, which has its own store. */}
       <TwinProvider>
-        <Shell />
+        {/* Operational records live above the screens, so switching modules
+            never discards them and traceability can follow a receipt into the
+            issues that drew on it. */}
+        <IncomingProvider>
+          <IssueProvider>
+            <Shell />
+          </IssueProvider>
+        </IncomingProvider>
       </TwinProvider>
     </PileProvider>
   )
@@ -53,76 +67,86 @@ export function AppShell() {
 
 function Shell() {
   const { mode } = usePiles()
+  const master = masterSection(mode)
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-bg">
-      <main className="relative flex-1 overflow-hidden">
-        <TopBar />
+    <div className="flex h-screen overflow-hidden bg-bg">
+      <Sidebar />
 
-        {/* Both views stay mounted so switching is instant and selection holds. */}
-        <div
-          className="absolute inset-0"
-          style={{ display: mode === "satellite" ? "block" : "none" }}
-          aria-hidden={mode !== "satellite"}
-        >
-          <PlantMap />
-        </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <main className="relative flex-1 overflow-hidden">
+          <TopBar />
 
-        <div
-          className="absolute inset-0"
-          style={{ display: mode === "twin" ? "block" : "none" }}
-          aria-hidden={mode !== "twin"}
-        >
-          <DigitalTwinView />
-        </div>
-
-        {mode === "incoming" && (
-          <div className="absolute inset-0">
-            <IncomingScreen />
+          {/* Both twin views stay mounted so switching is instant and selection holds. */}
+          <div
+            className="absolute inset-0"
+            style={{ display: mode === "satellite" ? "block" : "none" }}
+            aria-hidden={mode !== "satellite"}
+          >
+            <PlantMap />
           </div>
-        )}
 
-        {mode === "inventory" && (
-          <div className="absolute inset-0">
-            <InventoryScreen />
+          <div
+            className="absolute inset-0"
+            style={{ display: mode === "twin" ? "block" : "none" }}
+            aria-hidden={mode !== "twin"}
+          >
+            <DigitalTwinView />
           </div>
-        )}
 
-        {mode === "flow" && (
-          <div className="absolute inset-0">
-            <PlantFlowView />
-          </div>
-        )}
+          {mode === "incoming" && (
+            <div className="absolute inset-0">
+              <IncomingScreen />
+            </div>
+          )}
 
-        {mode === "satellite" && (
-          <>
-            <AssetTypeLegend />
-            <LiveInventoryCard />
-            <ApproximateNote />
-            <MapChrome />
-          </>
-        )}
+          {mode === "issues" && (
+            <div className="absolute inset-0">
+              <IssueScreen />
+            </div>
+          )}
 
-        <RecordStock />
-      </main>
+          {mode === "inventory" && (
+            <div className="absolute inset-0">
+              <InventoryScreen />
+            </div>
+          )}
 
-      <footer className="flex shrink-0 items-center gap-2 border-t border-line bg-panel px-4 py-1.5 text-[11px] text-ink-3">
-        <span className="font-semibold text-ink-2">Boral</span>
-        <span>|</span>
-        <span>Digital Twin</span>
-        <span>|</span>
-        <span>Berrima Cement Works</span>
-        <span className="ml-auto text-right">
-          3D model for visualization purposes. Asset positions are approximate and not
-          survey-verified.
-        </span>
-      </footer>
+          {mode === "reports" && (
+            <div className="absolute inset-0">
+              <ReportsScreen />
+            </div>
+          )}
+
+          {master && (
+            <div className="absolute inset-0">
+              <MasterScreen section={master} />
+            </div>
+          )}
+
+          {mode === "satellite" && (
+            <>
+              <LiveInventoryCard />
+              <MapChrome />
+            </>
+          )}
+        </main>
+
+        <footer className="flex shrink-0 items-center gap-2 border-t border-line bg-panel px-4 py-1.5 text-[11px] text-ink-3">
+          <span className="font-semibold text-ink-2">Boral</span>
+          <span>|</span>
+          <span>Digital Twin</span>
+          <span>|</span>
+          <span>Berrima Cement Works</span>
+          <span className="ml-auto text-right">
+            3D model for visualization purposes. Asset positions are approximate and not survey-verified.
+          </span>
+        </footer>
+      </div>
     </div>
   )
 }
 
 function Loading({ label }: { label: string }) {
-  return (
-    <div className="absolute inset-0 grid place-items-center text-[13px] text-ink-3">{label}</div>
-  )
+  return <div className="absolute inset-0 grid place-items-center text-[13px] text-ink-3">{label}</div>
 }

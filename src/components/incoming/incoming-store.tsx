@@ -3,74 +3,121 @@
 /**
  * Incoming Materials workflow state.
  *
- * Holds one record per incoming load and advances it through the four stages.
- * The final stage posts the received quantity through the EXISTING inventory
- * transaction mechanism (`addStock`) — this module performs no inventory
- * arithmetic and never writes a balance directly.
+ *   QR scan / PO entry → IDENTIFIED → WEIGHING → QUALITY → RECEIVED
  *
- * If the posting fails the status is left untouched, so a record can never end
- * up RECEIVED without the matching inventory transaction.
+ * Receipt posts an INCOMING transaction into an inventory record through the
+ * shared inventory mechanism (`postMovement`). This module keeps no quantity of
+ * its own. If the posting is refused the record stays where it was and
+ * inventory is untouched.
  */
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react"
 
-import { resolvePurchaseOrder, seedIncoming } from "@/lib/incoming/catalog"
-import type {
-  IncomingRecord,
-  IncomingStatus,
-  Quality,
-  Weighing,
-} from "@/lib/incoming/types"
 import { usePiles } from "@/components/shell/pile-store"
+import { qualityParameters, resolvePurchaseOrder, sampleRequiredFor } from "@/lib/incoming/catalog"
+import { gradeEntry, materialEntry } from "@/lib/inventory/catalog"
+import { createLot } from "@/lib/inventory/lots"
+import { readingPasses } from "@/lib/masters/types"
+import type { IncomingRecord, IncomingStatus, QualityReading, QualityResult } from "@/lib/incoming/types"
+import { seedBundle } from "@/lib/inventory/seed"
 
 type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 
+const OPERATOR = "operator.01"
+
+export type IdentifyInput = {
+  poNumber: string
+  identifiedBy: "QR" | "MANUAL"
+  receivingInventoryId: string
+  gateEntryNo: string
+  grnNo: string
+  vehicleRef: string
+  batch: string
+  origin: string
+}
+
 function useIncomingState() {
-  const { addStock, canWriteInventory } = usePiles()
-  const [records, setRecords] = useState<IncomingRecord[]>(() => seedIncoming())
+  const { postMovement, canWriteInventory, recordOf, setExpiryDate } = usePiles()
+  const [records, setRecords] = useState<IncomingRecord[]>(() => seedBundle().incoming)
   const [openId, setOpenId] = useState<string | null>(null)
 
-  const nextIncomingId = useCallback(
-    () => `IN-${String(41 + records.length + 1).padStart(5, "0")}`,
-    [records.length],
-  )
+  const patch = useCallback((incomingId: string, apply: (r: IncomingRecord) => IncomingRecord) => {
+    setRecords((prev) => prev.map((r) => (r.incomingId === incomingId ? apply(r) : r)))
+  }, [])
 
-  const actor = "operator.01"
-
-  const patch = useCallback(
-    (incomingId: string, apply: (r: IncomingRecord) => IncomingRecord) => {
-      setRecords((prev) => prev.map((r) => (r.incomingId === incomingId ? apply(r) : r)))
+  /**
+   * A receiving balance must be an active record holding the PO's material AND
+   * its grade. Receiving one grade into a balance of another would blend two
+   * specifications into a figure that no longer means anything.
+   */
+  const checkReceiving = useCallback(
+    (materialId: string, inventoryId: string, gradeId?: string): string | null => {
+      const inv = recordOf(inventoryId)
+      if (!inv) return "Select the receiving location."
+      if (!inv.active) return `${inv.inventoryId} is archived.`
+      if (inv.materialId !== materialId) return `${inv.inventoryId} does not hold this material.`
+      if (gradeId && inv.gradeId && inv.gradeId !== gradeId) {
+        return `${inv.inventoryId} holds ${gradeEntry(inv.gradeId)?.name ?? inv.gradeId}, not ${gradeEntry(gradeId)?.name ?? gradeId}.`
+      }
+      return null
     },
-    [],
+    [recordOf],
   )
 
-  /** Identify a PO and register it. One record, from here to receipt. */
+  /** Identify a delivery (QR or PO number) and open its record. */
   const register = useCallback(
-    (poNumber: string): Result<IncomingRecord> => {
-      const po = resolvePurchaseOrder(poNumber)
-      if (!po) return { ok: false, error: `${poNumber} is not a valid PO number.` }
+    (input: IdentifyInput): Result<IncomingRecord> => {
+      if (!canWriteInventory) return { ok: false, error: "You do not have permission to receive materials." }
+      const po = resolvePurchaseOrder(input.poNumber)
+      if (!po) return { ok: false, error: `${input.poNumber} is not a valid PO number.` }
       if (records.some((r) => r.poNumber === po.poNumber && r.status !== "RECEIVED")) {
-        return { ok: false, error: `${po.poNumber} is already in progress.` }
+        return { ok: false, error: `${po.poNumber} already has a delivery in progress.` }
+      }
+      const receivingError = checkReceiving(po.materialId, input.receivingInventoryId, po.gradeId)
+      if (receivingError) return { ok: false, error: receivingError }
+
+      const gateEntryNo = input.gateEntryNo.trim().toUpperCase()
+      const grnNo = input.grnNo.trim().toUpperCase()
+      if (gateEntryNo && records.some((r) => r.gateEntryNo === gateEntryNo)) {
+        return { ok: false, error: `Gate Entry ${gateEntryNo} is already used by another delivery.` }
+      }
+      if (grnNo && records.some((r) => r.grnNo === grnNo)) {
+        return { ok: false, error: `GRN ${grnNo} is already used by another delivery.` }
       }
 
       const at = new Date().toISOString()
+      const next = Math.max(41, ...records.map((r) => Number(r.incomingId.slice(3)) || 0)) + 1
+      const gradeId = po.gradeId ?? recordOf(input.receivingInventoryId)?.gradeId
+      // Sampling follows the grade's plan, counted over that grade's deliveries.
+      const nth = records.filter((r) => r.gradeId === gradeId).length + 1
+      const sampleRequired = sampleRequiredFor(gradeId, nth)
       const record: IncomingRecord = {
-        incomingId: nextIncomingId(),
+        incomingId: `IN-${String(next).padStart(5, "0")}`,
         poNumber: po.poNumber,
+        gateEntryNo: gateEntryNo || undefined,
+        grnNo: grnNo || undefined,
+        sampleRequired,
+        identifiedBy: input.identifiedBy,
         materialId: po.materialId,
+        gradeId,
         supplier: po.supplier,
         expectedMt: po.expectedMt,
         expectedArrival: po.expectedArrival,
         destinationLocationId: po.destinationLocationId,
-        status: "REGISTERED",
+        receivingInventoryId: input.receivingInventoryId,
+        vehicleRef: input.vehicleRef.trim() || undefined,
+        batch: input.batch.trim() || undefined,
+        origin: input.origin.trim() || undefined,
+        status: "IDENTIFIED",
+        adHoc: po.adHoc || undefined,
         audit: [
           {
             at,
-            by: actor,
-            action: po.adHoc
-              ? "Incoming material registered — PO not in catalogue, details captured at gate"
-              : "Incoming material registered",
-            to: "REGISTERED",
+            by: OPERATOR,
+            action: `Delivery identified by ${input.identifiedBy === "QR" ? "QR scan" : "PO number"}${
+              po.adHoc ? " — PO not in catalogue, details generated at the gate" : ""
+            }`,
+            to: "IDENTIFIED",
           },
         ],
         provenance: "DEMO",
@@ -78,133 +125,237 @@ function useIncomingState() {
       setRecords((prev) => [record, ...prev])
       return { ok: true, value: record }
     },
-    [records, nextIncomingId],
+    [records, canWriteInventory, checkReceiving, recordOf],
+  )
+
+  /** Record that a sample was drawn for testing. Only for deliveries the sampling plan selects. */
+  const collectSample = useCallback(
+    (incomingId: string): Result<string> => {
+      const record = records.find((r) => r.incomingId === incomingId)
+      if (!record) return { ok: false, error: "Incoming record not found." }
+      if (!record.sampleRequired) return { ok: false, error: "No sample is required for this delivery." }
+      if (record.sample) return { ok: false, error: `Sample ${record.sample.sampleId} is already collected.` }
+      if (record.status === "QUALITY" || record.status === "RECEIVED") return { ok: false, error: "Quality is already recorded." }
+      const used = records.map((r) => Number(r.sample?.sampleId.slice(4)) || 0)
+      const sampleId = `SMP-${String(Math.max(333, ...used) + 1).padStart(5, "0")}`
+      const at = new Date().toISOString()
+      patch(incomingId, (r) => ({
+        ...r,
+        sample: { sampleId, collectedAt: at, collectedBy: "lab.02" },
+        audit: [...r.audit, { at, by: "lab.02", action: `Sample collected — ${sampleId}` }],
+      }))
+      return { ok: true, value: sampleId }
+    },
+    [records, patch],
   )
 
   const recordWeighing = useCallback(
-    (incomingId: string, input: Omit<Weighing, "at" | "by" | "netMt">): Result<true> => {
-      if (input.grossMt <= 0) return { ok: false, error: "Gross weight must be greater than zero." }
-      if (input.tareMt < 0) return { ok: false, error: "Tare weight cannot be negative." }
+    (incomingId: string, input: { grossMt: number | null; tareMt: number | null }): Result<true> => {
+      const record = records.find((r) => r.incomingId === incomingId)
+      if (!record || record.status !== "IDENTIFIED") return { ok: false, error: "This delivery is not awaiting weighing." }
+      if (input.grossMt === null || input.grossMt <= 0) return { ok: false, error: "Gross weight must be a number greater than zero." }
+      if (input.tareMt === null || input.tareMt < 0) return { ok: false, error: "Tare weight must be a number, zero or more." }
       const net = input.grossMt - input.tareMt
-      if (net <= 0) return { ok: false, error: "Net weight must be greater than zero." }
-      if (!input.weighbridgeRef.trim()) {
-        return { ok: false, error: "Enter the weighbridge reference." }
-      }
+      if (net <= 0) return { ok: false, error: "Net weight must be greater than zero — check gross and tare." }
 
       const at = new Date().toISOString()
       patch(incomingId, (r) => ({
         ...r,
-        status: "WEIGHED",
-        weighing: { ...input, netMt: net, at, by: actor },
-        audit: [
-          ...r.audit,
-          { at, by: actor, action: "Weighing completed", from: r.status, to: "WEIGHED" },
-        ],
+        status: "WEIGHING",
+        weighing: { grossMt: input.grossMt!, tareMt: input.tareMt!, netMt: net, at, by: OPERATOR },
+        audit: [...r.audit, { at, by: OPERATOR, action: `Weight recorded — net ${net.toLocaleString()} MT`, from: r.status, to: "WEIGHING" }],
       }))
       return { ok: true, value: true }
     },
-    [patch],
+    [records, patch],
   )
 
   const recordQuality = useCallback(
-    (incomingId: string, input: Omit<Quality, "at" | "by">): Result<true> => {
-      if (input.readings.some((r) => !r.value.trim())) {
-        return { ok: false, error: "Enter a result for every parameter." }
+    (incomingId: string, input: { result: QualityResult | ""; notes: string; readings: QualityReading[] }): Result<true> => {
+      const record = records.find((r) => r.incomingId === incomingId)
+      if (!record || record.status !== "WEIGHING") return { ok: false, error: "This delivery is not awaiting quality." }
+      if (input.result !== "PASS" && input.result !== "FAIL") return { ok: false, error: "Select PASS or FAIL." }
+      // A delivery the plan samples cannot be accepted until its sample is drawn
+      // and tested; one the plan skips is accepted on inspection.
+      const tested = record.sampleRequired || input.readings.some((r) => r.value.trim())
+      if (record.sampleRequired && !record.sample) return { ok: false, error: "Collect the sample before recording the test result." }
+      if (record.sampleRequired) {
+        const required = qualityParameters(record.gradeId)
+        if (required.some((p) => !input.readings.find((r) => r.parameter === p.parameter)?.value.trim())) {
+          return { ok: false, error: "Enter a result for every grade parameter." }
+        }
       }
       const at = new Date().toISOString()
+      const result = input.result
       patch(incomingId, (r) => ({
         ...r,
-        status: "QUALITY_CHECKED",
-        quality: { ...input, at, by: "lab.02" },
+        status: "QUALITY",
+        quality: { result, notes: input.notes.trim(), tested, readings: input.readings, at, by: "lab.02" },
         audit: [
           ...r.audit,
           {
             at,
             by: "lab.02",
-            action: `Quality check completed — ${input.result.replace(/_/g, " ").toLowerCase()}`,
+            action: tested ? `Test result recorded — ${result}` : `Accepted without test — ${result} (no sample required)`,
             from: r.status,
-            to: "QUALITY_CHECKED",
+            to: "QUALITY",
           },
         ],
       }))
       return { ok: true, value: true }
     },
-    [patch],
+    [records, patch],
   )
 
   /**
-   * Confirm receipt.
-   *
-   * Posts through the existing inventory mechanism FIRST. Only if that
-   * succeeds does the record advance — a failed posting leaves the record at
-   * QUALITY CHECKED with inventory untouched.
+   * Confirm receipt: post INCOMING first; advance to RECEIVED only if it posted.
    */
   const confirmReceipt = useCallback(
     (
       incomingId: string,
-      input: { receivedMt: number; destinationLocationId: string },
-    ): Result<{ transactionId: string }> => {
+      input: { receivedMt: number | null; receivingInventoryId: string; lotId?: string; expiryDate?: string },
+    ): Result<{ transactionId: string; lotId?: string }> => {
       const record = records.find((r) => r.incomingId === incomingId)
       if (!record) return { ok: false, error: "Incoming record not found." }
-      if (record.status !== "QUALITY_CHECKED") {
-        return { ok: false, error: "Quality check must be completed before receipt." }
+      if (record.status !== "QUALITY") return { ok: false, error: "Quality must be recorded before receipt." }
+      if (record.quality?.result !== "PASS") return { ok: false, error: "Quality FAILED — this delivery cannot be received into inventory." }
+      if (!canWriteInventory) return { ok: false, error: "You do not have permission to post inventory receipts." }
+      if (input.receivedMt === null || input.receivedMt <= 0) {
+        return { ok: false, error: "Received quantity must be a number greater than zero." }
       }
-      if (!canWriteInventory) {
-        return { ok: false, error: "You do not have permission to post inventory receipts." }
-      }
-      if (!Number.isFinite(input.receivedMt) || input.receivedMt <= 0) {
-        return { ok: false, error: "Enter a received quantity greater than zero." }
+      const receivingError = checkReceiving(record.materialId, input.receivingInventoryId, record.gradeId)
+      if (receivingError) return { ok: false, error: receivingError }
+
+      // A lot / batch reference is recorded only where the material is
+      // lot-tracked. Otherwise the receipt traces on PO, Gate Entry, GRN and
+      // Incoming ID, and no lot is created or asked for.
+      const balance = recordOf(input.receivingInventoryId)
+      const gradeId = record.gradeId ?? balance?.gradeId ?? ""
+      const material = materialEntry(record.materialId)
+      if (input.lotId?.trim() && !material?.lotTracking) {
+        return { ok: false, error: `${material?.name ?? "This material"} is not lot-tracked, so it takes no lot reference.` }
       }
 
-      const posted = addStock({
-        locationId: input.destinationLocationId,
+      // Expiry — only where the material says it applies. The batch's date is
+      // required, an already-expired batch is not received, and a balance keeps
+      // one shelf life: dated stock is never blended into stock of another date.
+      const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
+      const dayKey = (iso: string) => new Date(iso).toISOString().slice(0, 10)
+      let expiryDate: string | undefined
+      if (material?.expiryApplicable) {
+        if (!input.expiryDate || !Number.isFinite(new Date(input.expiryDate).getTime())) {
+          return { ok: false, error: `Expiry applies to ${material.name}. Enter the expiry date of the batch received.` }
+        }
+        expiryDate = new Date(input.expiryDate).toISOString()
+        if (new Date(expiryDate).getTime() < Date.now()) {
+          return { ok: false, error: `This batch expired on ${day(expiryDate)}. Expired material is not received into inventory.` }
+        }
+        if (balance && balance.quantity > 0 && balance.expiryDate && dayKey(balance.expiryDate) !== dayKey(expiryDate)) {
+          return {
+            ok: false,
+            error: `${balance.inventoryId} holds ${Math.round(balance.quantity).toLocaleString()} ${balance.uom} expiring ${day(balance.expiryDate)}; this batch expires ${day(expiryDate)}. Receive it into an empty record or create a new inventory record for it, so each shelf life stays traceable.`,
+          }
+        }
+      } else if (input.expiryDate) {
+        return { ok: false, error: `Expiry does not apply to ${material?.name ?? "this material"}.` }
+      }
+      const at = new Date().toISOString()
+      const lot = !material?.lotTracking ? undefined : createLot({
+        lotId: input.lotId,
         materialId: record.materialId,
-        quantity: input.receivedMt,
-        reference: `${record.poNumber} · ${record.incomingId}`,
-        actor,
+        gradeId,
+        receivedQty: input.receivedMt,
+        uom: balance?.uom ?? material?.uom ?? "MT",
+        locationId: balance?.locationId ?? record.destinationLocationId,
+        inventoryId: input.receivingInventoryId,
+        poNumber: record.poNumber,
+        incomingId: record.incomingId,
+        supplier: record.supplier,
+        supplierBatch: record.batch,
+        quality: (record.quality?.readings ?? []).map((r) => {
+          const spec = qualityParameters(gradeId).find((p) => p.parameter === r.parameter)
+          const value = Number(r.value)
+          const numeric = Number.isFinite(value) ? value : null
+          return {
+            parameterId: spec?.parameterId ?? r.parameter,
+            name: r.parameter,
+            unit: r.unit,
+            value: numeric,
+            min: spec?.min ?? null,
+            max: spec?.max ?? null,
+            target: spec?.target ?? null,
+            pass: readingPasses(numeric, spec?.min ?? null, spec?.max ?? null),
+          }
+        }),
+        qualityResult: "PASS",
+        expiryDate,
+        receivedAt: at,
+        receivedBy: OPERATOR,
+        provenance: "DEMO",
       })
-      if ("error" in posted) return { ok: false, error: posted.error }
 
-      const at = posted.at
+      const posted = postMovement({
+        inventoryId: input.receivingInventoryId,
+        type: "INCOMING",
+        quantity: input.receivedMt,
+        batch: record.batch,
+        reference: record.vehicleRef,
+        lotId: lot?.lotId,
+        gradeId: gradeId || undefined,
+        links: {
+          poNumber: record.poNumber,
+          gateEntryNo: record.gateEntryNo,
+          grnNo: record.grnNo,
+          incomingId: record.incomingId,
+          qualityRef: `${record.incomingId} · ${record.quality?.result ?? "PASS"}`,
+          lotId: lot?.lotId,
+        },
+      })
+      if (!posted.ok) return posted
+
+      // The balance now carries the batch's shelf life (it was empty, undated or already this date).
+      if (expiryDate && (!balance?.expiryDate || dayKey(balance.expiryDate) !== dayKey(expiryDate))) {
+        setExpiryDate(input.receivingInventoryId, expiryDate, `Received with ${record.incomingId} (${record.poNumber})`)
+      }
+
+      const txn = posted.value
       patch(incomingId, (r) => ({
         ...r,
         status: "RECEIVED",
+        receivingInventoryId: input.receivingInventoryId,
         receipt: {
-          receivedMt: input.receivedMt,
-          varianceMt: input.receivedMt - r.expectedMt,
-          destinationLocationId: input.destinationLocationId,
-          transactionId: posted.txnId,
-          at,
-          by: actor,
+          receivedMt: input.receivedMt!,
+          varianceMt: input.receivedMt! - r.expectedMt,
+          inventoryId: txn.inventoryId,
+          locationId: txn.locationId,
+          lotId: lot?.lotId,
+          expiryDate,
+          transactionId: txn.txnId,
+          at: txn.at,
+          by: OPERATOR,
         },
         audit: [
           ...r.audit,
           {
-            at,
-            by: actor,
-            action: `Receipt confirmed — inventory transaction ${posted.txnId}`,
+            at: txn.at,
+            by: OPERATOR,
+            action: lot
+              ? `Receipt confirmed — lot ${lot.lotId}, inventory transaction ${txn.txnId}`
+              : `Receipt confirmed — inventory transaction ${txn.txnId}`,
             from: r.status,
             to: "RECEIVED",
           },
         ],
       }))
-      return { ok: true, value: { transactionId: posted.txnId } }
+      return { ok: true, value: { transactionId: txn.txnId, lotId: lot?.lotId } }
     },
-    [records, addStock, canWriteInventory, patch],
+    [records, canWriteInventory, checkReceiving, postMovement, patch, recordOf, setExpiryDate],
   )
 
-  const open = useMemo(
-    () => records.find((r) => r.incomingId === openId) ?? null,
-    [records, openId],
-  )
+  const open = useMemo(() => records.find((r) => r.incomingId === openId) ?? null, [records, openId])
 
   const countByStatus = useMemo(() => {
-    const counts: Record<IncomingStatus, number> = {
-      REGISTERED: 0,
-      WEIGHED: 0,
-      QUALITY_CHECKED: 0,
-      RECEIVED: 0,
-    }
+    const counts: Record<IncomingStatus, number> = { IDENTIFIED: 0, WEIGHING: 0, QUALITY: 0, RECEIVED: 0 }
     for (const r of records) counts[r.status] += 1
     return counts
   }, [records])
@@ -215,6 +366,7 @@ function useIncomingState() {
     openId,
     setOpenId,
     register,
+    collectSample,
     recordWeighing,
     recordQuality,
     confirmReceipt,

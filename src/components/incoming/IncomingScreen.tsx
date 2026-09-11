@@ -11,24 +11,24 @@
 import { useMemo, useState } from "react"
 
 import { MATERIAL_GROUP_OPTIONS, SUPPLIERS } from "@/lib/incoming/catalog"
-import { materialEntry } from "@/lib/inventory/catalog"
+import { gradeEntry, materialEntry } from "@/lib/inventory/catalog"
 import {
   STATUS_LABEL,
   STATUS_ORDER,
   STATUS_TONE,
   actualMt,
   type IncomingStatus,
+  qualityState,
 } from "@/lib/incoming/types"
 import { IncomingDetailModal } from "./IncomingDetailModal"
-import { NewIncomingModal, QualityModal, ReceiptModal, WeighingModal } from "./StageModals"
-import { IncomingProvider, useIncoming } from "./incoming-store"
+import { IdentifyModal, QualityModal, ReceiptModal, WeighingModal } from "./StageModals"
+import { AddedBanner, useJustAdded } from "@/components/shell/just-added"
+import { useIncoming } from "./incoming-store"
+import { toneText } from "@/lib/theme/tone"
 
+/** Records are held by the shell's IncomingProvider, so they persist across modules. */
 export function IncomingScreen() {
-  return (
-    <IncomingProvider>
-      <Screen />
-    </IncomingProvider>
-  )
+  return <Screen />
 }
 
 /** Which stage modal is open, if any. */
@@ -41,8 +41,9 @@ function Screen() {
   const [status, setStatus] = useState<"" | IncomingStatus>("")
   const [group, setGroup] = useState("")
   const [supplier, setSupplier] = useState("")
-  const [newOpen, setNewOpen] = useState(false)
+  const [identify, setIdentify] = useState<"QR" | "MANUAL" | null>(null)
   const [stage, setStage] = useState<Stage>(null)
+  const added = useJustAdded()
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -65,9 +66,9 @@ function Screen() {
   /** Open the stage the record is actually waiting on. */
   const advance = () => {
     if (!open) return
-    if (open.status === "REGISTERED") setStage("weighing")
-    else if (open.status === "WEIGHED") setStage("quality")
-    else if (open.status === "QUALITY_CHECKED") setStage("receipt")
+    if (open.status === "IDENTIFIED") setStage("weighing")
+    else if (open.status === "WEIGHING") setStage("quality")
+    else if (open.status === "QUALITY" && open.quality?.result === "PASS") setStage("receipt")
   }
 
   return (
@@ -84,12 +85,26 @@ function Screen() {
             </p>
           </div>
           {canWriteInventory ? (
-            <button
-              onClick={() => setNewOpen(true)}
-              className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110"
-            >
-              + New Incoming Material
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setIdentify("MANUAL")}
+                className="rounded-lg bg-panel px-4 py-2.5 text-[13px] font-semibold text-accent ring-1 ring-accent/60 hover:bg-panel-2"
+              >
+                Enter PO Manually
+              </button>
+              <button
+                onClick={() => setIdentify("QR")}
+                className="flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-[13px] font-semibold text-accent-ink hover:brightness-110"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+                  <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+                    <path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 16h3" />
+                  </g>
+                </svg>
+                Scan QR
+              </button>
+            </div>
           ) : (
             <span className="rounded-lg bg-panel-2 px-3.5 py-2 text-[12px] text-ink-3 ring-1 ring-line">
               Read-only access
@@ -155,11 +170,13 @@ function Screen() {
           )}
         </div>
 
+        <AddedBanner added={added} />
         <div className="overflow-x-auto rounded-xl ring-1 ring-line">
           <table className="w-full min-w-[1040px] border-collapse text-[12.5px]">
             <thead>
               <tr className="bg-panel-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-2">
                 <Th>PO No.</Th>
+                <Th>Gate Entry / GRN</Th>
                 <Th>Incoming ID</Th>
                 <Th>Material</Th>
                 <Th>Supplier</Th>
@@ -178,31 +195,46 @@ function Screen() {
                 return (
                   <tr
                     key={r.incomingId}
-                    className="cursor-pointer border-t border-line bg-panel/60 hover:bg-panel-2"
+                    data-added-key={r.incomingId}
+                    className={`cursor-pointer border-t border-line bg-panel/60 hover:bg-panel-2 ${added.rowClass(r.incomingId)}`}
                     onClick={() => setOpenId(r.incomingId)}
                   >
                     <Td className="font-mono text-ink">{r.poNumber}</Td>
+                    <Td className="font-mono text-[11.5px] text-ink-2">
+                      <span className="block">{r.gateEntryNo ?? "—"}</span>
+                      <span className="block text-ink-3">{r.grnNo ?? "—"}</span>
+                    </Td>
                     <Td className="font-mono text-ink-2">{r.incomingId}</Td>
                     <Td>
                       <span className="block text-ink">{material?.name ?? r.materialId}</span>
-                      <span className="block text-[11px] text-ink-3">{material?.group}</span>
+                      <span className="block text-[11px] text-ink-3">{gradeEntry(r.gradeId)?.name ?? material?.group}</span>
                     </Td>
                     <Td className="text-ink-2">{r.supplier}</Td>
                     <Td className="text-right font-mono text-ink">
-                      {r.expectedMt.toLocaleString()} MT
+                      {r.expectedMt.toLocaleString()} {material?.uom ?? "MT"}
                     </Td>
                     <Td className="text-right font-mono text-ink">
-                      {actual !== null ? `${actual.toLocaleString()} MT` : <span className="text-ink-3">—</span>}
+                      {actual !== null ? `${actual.toLocaleString()} ${material?.uom ?? "MT"}` : <span className="text-ink-3">—</span>}
                     </Td>
                     <Td>
                       {/* Text label always present; colour is secondary. */}
                       <span
                         className="inline-flex items-center gap-1.5 rounded-full px-2 py-[2px] text-[11px] font-semibold"
-                        style={{ color: tone, background: `${tone}1f` }}
+                        style={{ color: toneText(tone), background: `${tone}1f` }}
                       >
                         <span className="h-2 w-2 rounded-full" style={{ background: tone }} />
-                        {STATUS_LABEL[r.status]}
+                        {STATUS_LABEL[r.status].toUpperCase()}
                       </span>
+                      {r.quality?.result === "FAIL" && (
+                        <span className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-ink">
+                          <span aria-hidden className="text-crit">✕</span> Quality FAIL
+                        </span>
+                      )}
+                      {qualityState(r) === "TEST_PENDING" && r.status !== "IDENTIFIED" && (
+                        <span className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-ink">
+                          <span aria-hidden className="text-warn">◷</span> {r.sample ? "TEST PENDING" : "SAMPLE PENDING"}
+                        </span>
+                      )}
                     </Td>
                     <Td className="whitespace-nowrap text-ink-3">
                       {new Date(r.expectedArrival).toLocaleString("en-AU", {
@@ -221,7 +253,7 @@ function Screen() {
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="border-t border-line py-8 text-center text-ink-3">
+                  <td colSpan={10} className="border-t border-line py-8 text-center text-ink-3">
                     No incoming materials match those filters.
                   </td>
                 </tr>
@@ -231,13 +263,28 @@ function Screen() {
         </div>
 
         <p className="mt-3 text-[11px] text-ink-3">
-          Purchase orders, suppliers and quality parameters are configured demo data — this
-          application has no PO or laboratory system to read from. Receipts post through the
-          existing inventory transaction mechanism.
+          Purchase orders and suppliers are configured demo data — this application has no PO system
+          to read from. Receipts post an INCOMING transaction into the selected inventory record.
         </p>
       </div>
 
-      {newOpen && <NewIncomingModal onClose={() => setNewOpen(false)} />}
+      {identify && (
+        <IdentifyModal
+          initialMethod={identify}
+          onClose={() => setIdentify(null)}
+          onRegistered={(r) => {
+            // Back to the worklist, with nothing filtering the new delivery out.
+            setQuery("")
+            setStatus("")
+            setGroup("")
+            setSupplier("")
+            added.mark(
+              r.incomingId,
+              `Delivery ${r.incomingId} identified — ${r.poNumber}, ${materialEntry(r.materialId)?.name ?? r.materialId}, ${r.supplier}. Next: weighing${r.sampleRequired ? "; a sample is required for this delivery" : ""}.`,
+            )
+          }}
+        />
+      )}
 
       {open && !stage && (
         <IncomingDetailModal

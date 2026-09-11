@@ -1,20 +1,26 @@
 /**
- * Purchase orders, suppliers and quality parameters.
+ * Purchase orders, suppliers and quality configuration.
  *
- * NONE of this exists in the application yet — there is no PO system, supplier
- * master or quality module to read from. It is therefore CONFIGURED DEMO DATA,
- * flagged `provenance: "DEMO"` on every record it produces, exactly as the
- * inventory figures are. Point this at a real PO feed and the workflow, the
- * screens and the inventory posting are unchanged.
+ * NONE of this exists in the application yet — there is no PO system or
+ * supplier master to read from. It is therefore CONFIGURED DEMO DATA, flagged
+ * `provenance: "DEMO"` on every record it produces, exactly as the inventory
+ * figures are. Point this at a real PO feed and the workflow, the screens and
+ * the inventory posting are unchanged.
  */
 
-import { MATERIAL_CATALOG, materialEntry } from "@/lib/inventory/catalog"
+import { MATERIAL_GROUPS } from "@/lib/inventory/catalog"
+import { seedGradeAt } from "@/lib/inventory/seed-records"
+import { gradeMaster } from "@/lib/masters/registry"
+import { seedInventoryIdAt } from "@/lib/inventory/seed-records"
 import type { IncomingRecord } from "./types"
 
 export type PurchaseOrder = {
   poNumber: string
   materialId: string
+  /** The grade bought. Quality is tested against this grade's parameters. */
+  gradeId?: string
   supplier: string
+  /** Ordered quantity, in the material's unit of measure (MT for bulk, DRUM / EA for spares). */
   expectedMt: number
   expectedArrival: string
   destinationLocationId: string
@@ -27,7 +33,7 @@ export type PurchaseOrder = {
  * server and client renders agree — `Math.random()` here would trip React
  * hydration and make the list change on every refresh.
  */
-function seededRandom(seed: string): () => number {
+export function seededRandom(seed: string): () => number {
   let h = 2166136261
   for (let i = 0; i < seed.length; i += 1) {
     h ^= seed.charCodeAt(i)
@@ -72,11 +78,11 @@ const LOAD_RANGE: Record<string, [number, number]> = {
   "MAT-SAND": [400, 900],
   "MAT-GYPSUM": [600, 1400],
   "MAT-COAL": [500, 1200],
-  "MAT-ALT-FUEL": [300, 800],
+  "MAT-ALT-FUEL": [60, 300],
 }
 
 const FIRST_PO = 10245
-const PO_COUNT = 40
+const PO_COUNT = 60
 const BASE_DAY = Date.UTC(2026, 8, 3) // 3 Sept 2026
 
 /** Build a purchase order deterministically from its number. */
@@ -84,7 +90,7 @@ function buildPurchaseOrder(poNumber: string, index: number): PurchaseOrder {
   const rand = seededRandom(poNumber)
   const inbound = INBOUND_MATERIALS[Math.floor(rand() * INBOUND_MATERIALS.length)]
   const [lo, hi] = LOAD_RANGE[inbound.materialId] ?? [500, 1500]
-  const qty = Math.round((lo + rand() * (hi - lo)) / 10) * 10
+  const qty = Math.round((lo + rand() * (hi - lo)) / 5) * 5
 
   // Spread arrivals across working hours over roughly a fortnight.
   const day = index >= 0 ? Math.floor(index / 3) : Math.floor(rand() * 14)
@@ -94,6 +100,9 @@ function buildPurchaseOrder(poNumber: string, index: number): PurchaseOrder {
   return {
     poNumber,
     materialId: inbound.materialId,
+    // The grade is the one held at the destination — a delivery is bought to
+    // the specification of the stock it joins.
+    gradeId: seedGradeAt(inbound.destination),
     supplier: SUPPLIER_POOL[Math.floor(rand() * SUPPLIER_POOL.length)],
     expectedMt: qty,
     expectedArrival: new Date(BASE_DAY + day * 86400000 + hour * 3600000 + minute * 60000).toISOString(),
@@ -101,10 +110,38 @@ function buildPurchaseOrder(poNumber: string, index: number): PurchaseOrder {
   }
 }
 
-/** The 40 purchase orders available to identify. */
-export const PURCHASE_ORDERS: PurchaseOrder[] = Array.from({ length: PO_COUNT }, (_, i) =>
-  buildPurchaseOrder(`PO-${FIRST_PO + i}`, i),
-)
+/**
+ * Spare-parts POs — configured demo data, like the rest of this file. They are
+ * counted, not weighed, and the lubricant is expiry-tracked, so its receipt
+ * asks for an expiry date. Kept apart from the generated POs so adding them
+ * changes no seeded delivery.
+ */
+const SPARE_POS: PurchaseOrder[] = [
+  {
+    poNumber: "PO-10305",
+    materialId: "MAT-SPARE-LUBRICANT",
+    gradeId: "GRD-LUB-STD",
+    supplier: "Illawarra Industrial Supplies",
+    expectedMt: 12,
+    expectedArrival: "2026-09-15T01:30:00.000Z",
+    destinationLocationId: "STORE-01",
+  },
+  {
+    poNumber: "PO-10306",
+    materialId: "MAT-SPARE-BEARING",
+    gradeId: "GRD-BRG-STD",
+    supplier: "Illawarra Industrial Supplies",
+    expectedMt: 4,
+    expectedArrival: "2026-09-16T03:00:00.000Z",
+    destinationLocationId: "STORE-01",
+  },
+]
+
+/** The purchase orders available to identify: 60 bulk (the first 34 have seeded deliveries) and the spares. */
+export const PURCHASE_ORDERS: PurchaseOrder[] = [
+  ...Array.from({ length: PO_COUNT }, (_, i) => buildPurchaseOrder(`PO-${FIRST_PO + i}`, i)),
+  ...SPARE_POS,
+]
 
 export function findPurchaseOrder(poNumber: string): PurchaseOrder | undefined {
   const key = poNumber.trim().toUpperCase()
@@ -119,9 +156,7 @@ export function findPurchaseOrder(poNumber: string): PurchaseOrder | undefined {
  * the operator at the gate. Such records are flagged `adHoc` so the screen can
  * say the PO was not found in the catalogue.
  */
-export function resolvePurchaseOrder(
-  poNumber: string,
-): (PurchaseOrder & { adHoc: boolean }) | undefined {
+export function resolvePurchaseOrder(poNumber: string): (PurchaseOrder & { adHoc: boolean }) | undefined {
   const key = poNumber.trim().toUpperCase()
   if (!/^PO-\d{3,8}$/.test(key)) return undefined
   const known = findPurchaseOrder(key)
@@ -132,158 +167,173 @@ export function resolvePurchaseOrder(
 /** QR payload for a PO tag. Scanning and typing resolve to the same record. */
 export const PO_QR_PREFIX = "berrima:po:"
 
+export function poQrPayload(poNumber: string): string {
+  return `${PO_QR_PREFIX}${poNumber}`
+}
+
+/** Accepts a scanned tag (`berrima:po:PO-10250`) or a bare PO number. */
 export function parsePoQr(raw: string): string | null {
   const value = raw.trim()
   if (!value) return null
-  const candidate = value.startsWith(PO_QR_PREFIX) ? value.slice(PO_QR_PREFIX.length) : value
+  const candidate = value.toLowerCase().startsWith(PO_QR_PREFIX) ? value.slice(PO_QR_PREFIX.length) : value
   return /^PO-\d{3,8}$/i.test(candidate.trim()) ? candidate.trim().toUpperCase() : null
 }
 
-export type QualitySpec = { parameter: string; unit?: string; spec?: string }
+export type QualitySpec = { parameterId: string; parameter: string; unit?: string; min: number | null; max: number | null; target: number | null }
 
 /**
- * Quality parameters per material. The application has no quality module, so
- * these are configuration; a real material master replaces this map.
+ * The parameters a delivery is tested on come from the GRADE it was bought to,
+ * registered under Master → Materials + Grades. Nothing is hard-coded here: register a
+ * parameter on the grade and the quality step asks for it; register none and
+ * quality stays a PASS / FAIL with notes.
  */
-const QUALITY_BY_MATERIAL: Record<string, QualitySpec[]> = {
-  "MAT-LIMESTONE": [
-    { parameter: "CaO", unit: "%", spec: "≥ 50.0" },
-    { parameter: "MgO", unit: "%", spec: "≤ 3.0" },
-    { parameter: "Moisture", unit: "%", spec: "≤ 5.0" },
-  ],
-  "MAT-CLAY-SHALE": [
-    { parameter: "SiO₂", unit: "%", spec: "55 – 65" },
-    { parameter: "Al₂O₃", unit: "%", spec: "15 – 22" },
-    { parameter: "Moisture", unit: "%", spec: "≤ 12.0" },
-  ],
-  "MAT-COAL": [
-    { parameter: "Calorific Value", unit: "kcal/kg", spec: "≥ 5,500" },
-    { parameter: "Ash", unit: "%", spec: "≤ 18.0" },
-    { parameter: "Total Moisture", unit: "%", spec: "≤ 10.0" },
-  ],
-  "MAT-GYPSUM": [
-    { parameter: "SO₃", unit: "%", spec: "≥ 38.0" },
-    { parameter: "Purity", unit: "%", spec: "≥ 85.0" },
-    { parameter: "Free Moisture", unit: "%", spec: "≤ 8.0" },
-  ],
-  "MAT-ALT-FUEL": [
-    { parameter: "Calorific Value", unit: "kcal/kg", spec: "≥ 3,800" },
-    { parameter: "Chlorine", unit: "%", spec: "≤ 1.0" },
-    { parameter: "Moisture", unit: "%", spec: "≤ 20.0" },
-  ],
-  "MAT-SAND": [
-    { parameter: "SiO₂", unit: "%", spec: "≥ 85.0" },
-    { parameter: "Moisture", unit: "%", spec: "≤ 6.0" },
-  ],
-}
-
-export function qualitySpecs(materialId: string): QualitySpec[] {
-  return (
-    QUALITY_BY_MATERIAL[materialId] ?? [
-      { parameter: "Visual inspection" },
-      { parameter: "Moisture", unit: "%" },
-    ]
-  )
+export function qualityParameters(gradeId: string | undefined): QualitySpec[] {
+  return (gradeMaster(gradeId)?.qualityParameters ?? []).map((p) => ({
+    parameterId: p.parameterId,
+    parameter: p.name,
+    unit: p.unit,
+    min: p.min,
+    max: p.max,
+    target: p.target,
+  }))
 }
 
 export const SUPPLIERS = SUPPLIER_POOL.slice().sort()
 
 /**
+ * Whether the n-th delivery (1-based) of a grade must be sampled, from the
+ * grade's sampling frequency: every delivery, every n-th, or none.
+ */
+export function sampleRequiredFor(gradeId: string | undefined, nth: number): boolean {
+  const every = gradeMaster(gradeId)?.sampleEvery ?? 0
+  return every > 0 && (nth - 1) % every === 0
+}
+
+/** Gate entry and GRN numbers, formatted as the plant documents show them. */
+export const formatGateEntry = (n: number) => `GE-${String(n).padStart(5, "0")}`
+export const formatGrn = (n: number) => `GRN-${String(n).padStart(5, "0")}`
+
+/** The next number after every one already used with a prefix. */
+export function nextDocNumber(used: Array<string | undefined>, prefix: string, floor: number): number {
+  const nums = used
+    .filter((v): v is string => Boolean(v) && (v as string).startsWith(`${prefix}-`))
+    .map((v) => Number(v.slice(prefix.length + 1)))
+    .filter((n) => Number.isFinite(n))
+  return Math.max(floor, ...nums) + 1
+}
+
+/**
  * Seeded worklist.
  *
- * Thirty-four incoming loads spread across the four stages, generated
- * deterministically from their PO numbers so the list is stable across renders.
- *
- * Seeded RECEIVED records reference a HISTORICAL transaction (TXN-HIST-…): they
- * predate this session, so their receipts are not in the live ledger and did not
- * move today's balances. Receipts confirmed in the app post for real.
+ * Thirty-four deliveries across the four stages, generated deterministically
+ * from their PO numbers. RECEIVED records are completed by the inventory seed
+ * (seed.ts), which writes their INCOMING transactions into the ledger and fills
+ * in `receipt.transactionId` — seeded receipts are real, traceable ledger
+ * entries, not placeholders.
  */
 export function seedIncoming(): IncomingRecord[] {
   const SEED_COUNT = 34
   const records: IncomingRecord[] = []
 
+  // Sampling follows each grade's plan, counted over that grade's deliveries.
+  const nthOfGrade = new Map<string, number>()
+  const required = PURCHASE_ORDERS.slice(0, SEED_COUNT).map((po) => {
+    const n = (nthOfGrade.get(po.gradeId ?? "") ?? 0) + 1
+    nthOfGrade.set(po.gradeId ?? "", n)
+    return sampleRequiredFor(po.gradeId, n)
+  })
+  // One tested delivery at the Quality stage fails and is held.
+  const failedIndex = required.findIndex((r, i) => r && i >= 16 && i < 24)
+
   for (let i = 0; i < SEED_COUNT; i += 1) {
     const po = PURCHASE_ORDERS[i]
     const rand = seededRandom(`seed-${po.poNumber}`)
-    const material = materialEntry(po.materialId)
-
-    // Older loads are further through the process than recent arrivals.
-    const progress = rand()
     const status: IncomingRecord["status"] =
-      i < 16 ? "RECEIVED" : i < 24 ? "QUALITY_CHECKED" : i < 30 ? "WEIGHED" : "REGISTERED"
+      i < 16 ? "RECEIVED" : i < 24 ? "QUALITY" : i < 30 ? "WEIGHING" : "IDENTIFIED"
 
     const arrival = new Date(po.expectedArrival)
-    const at = (offsetMin: number) =>
-      new Date(arrival.getTime() + offsetMin * 60000).toISOString()
+    const at = (offsetMin: number) => new Date(arrival.getTime() + offsetMin * 60000).toISOString()
+    const byRail = po.materialId === "MAT-LIMESTONE"
 
     const record: IncomingRecord = {
       incomingId: `IN-${String(42 + i).padStart(5, "0")}`,
       poNumber: po.poNumber,
+      gateEntryNo: formatGateEntry(500 + i),
+      grnNo: formatGrn(400 + i),
+      identifiedBy: rand() > 0.3 ? "QR" : "MANUAL",
       materialId: po.materialId,
+      gradeId: po.gradeId,
       supplier: po.supplier,
       expectedMt: po.expectedMt,
       expectedArrival: po.expectedArrival,
       destinationLocationId: po.destinationLocationId,
-      status: "REGISTERED",
-      audit: [
-        { at: at(0), by: "operator.01", action: "Incoming material registered", to: "REGISTERED" },
-      ],
+      receivingInventoryId: seedInventoryIdAt(po.destinationLocationId) ?? "",
+      vehicleRef: byRail ? `RAIL-${4100 + i}` : `TRK-${String(210 + i * 7).padStart(4, "0")}`,
+      batch: rand() > 0.45 ? `B-${100 + i}` : undefined,
+      origin: byRail ? "Marulan South Limestone Mine" : undefined,
+      status: "IDENTIFIED",
+      sampleRequired: required[i],
+      audit: [{ at: at(0), by: "operator.01", action: "Delivery identified", to: "IDENTIFIED" }],
       provenance: "DEMO",
     }
-    if (status === "REGISTERED") {
+    if (status === "IDENTIFIED") {
       records.push(record)
       continue
     }
 
     // Weighed loads land within a few per cent of the ordered quantity.
-    const net = Math.round(po.expectedMt * (0.96 + progress * 0.07))
-    const tare = 600 + Math.round(rand() * 400)
+    const net = Math.round(po.expectedMt * (0.96 + rand() * 0.07))
+    const tare = 20 + Math.round(rand() * 15)
     const weighed: IncomingRecord = {
       ...record,
-      status: "WEIGHED",
-      weighing: {
-        grossMt: net + tare,
-        tareMt: tare,
-        netMt: net,
-        weighbridgeRef: `WB-${String(40 + i).padStart(5, "0")}`,
-        at: at(25),
-        by: "operator.01",
-      },
-      audit: [
-        ...record.audit,
-        { at: at(25), by: "operator.01", action: "Weighing completed", from: "REGISTERED", to: "WEIGHED" },
-      ],
+      status: "WEIGHING",
+      weighing: { grossMt: net + tare, tareMt: tare, netMt: net, at: at(25), by: "operator.01" },
+      audit: [...record.audit, { at: at(25), by: "operator.01", action: "Weight recorded", from: "IDENTIFIED", to: "WEIGHING" }],
     }
-    if (status === "WEIGHED") {
-      records.push(weighed)
+    // A sample is drawn at the weighbridge where the plan requires one. Some of
+    // the newest weighed loads are still waiting for it.
+    const sampled: IncomingRecord =
+      weighed.sampleRequired && (status !== "WEIGHING" || i < 27)
+        ? {
+            ...weighed,
+            sample: { sampleId: `SMP-${String(300 + i).padStart(5, "0")}`, collectedAt: at(35), collectedBy: "lab.02" },
+            audit: [...weighed.audit, { at: at(35), by: "lab.02", action: `Sample collected — SMP-${String(300 + i).padStart(5, "0")}` }],
+          }
+        : weighed
+    if (status === "WEIGHING") {
+      records.push(sampled)
       continue
     }
 
-    const deviation = rand() > 0.86
-    const specs = qualitySpecs(po.materialId)
+    const failed = i === failedIndex
+    const tested = sampled.sampleRequired
     const checked: IncomingRecord = {
-      ...weighed,
-      status: "QUALITY_CHECKED",
+      ...sampled,
+      status: "QUALITY",
       quality: {
-        readings: specs.map((spec, j) => ({
-          parameter: spec.parameter,
-          value: sampleReading(spec.parameter, seededRandom(`${po.poNumber}-${j}`)),
-          unit: spec.unit,
-          spec: spec.spec,
-        })),
-        result: deviation ? "ACCEPTED_WITH_DEVIATION" : "ACCEPTED",
-        comments: deviation
-          ? "Marginal on one parameter. Accepted for blending."
-          : `Sampled on arrival. ${material?.name ?? ""} within specification.`.trim(),
+        result: failed ? "FAIL" : "PASS",
+        notes: failed
+          ? "Moisture visibly high on sampling. Held for supplier review."
+          : tested
+            ? ""
+            : "No sample required for this delivery under the grade's sampling plan.",
+        tested,
+        readings: [],
         at: at(75),
         by: rand() > 0.5 ? "lab.02" : "lab.03",
       },
       audit: [
-        ...weighed.audit,
-        { at: at(75), by: "lab.02", action: "Quality check completed", from: "WEIGHED", to: "QUALITY_CHECKED" },
+        ...sampled.audit,
+        {
+          at: at(75),
+          by: "lab.02",
+          action: failed ? "Test result recorded — FAIL" : tested ? "Test result recorded — PASS" : "Accepted — no sample required",
+          from: "WEIGHING",
+          to: "QUALITY",
+        },
       ],
     }
-    if (status === "QUALITY_CHECKED") {
+    if (status === "QUALITY") {
       records.push(checked)
       continue
     }
@@ -294,59 +344,19 @@ export function seedIncoming(): IncomingRecord[] {
       receipt: {
         receivedMt: net,
         varianceMt: net - po.expectedMt,
-        destinationLocationId: po.destinationLocationId,
-        transactionId: `TXN-HIST-${String(1000 + i)}`,
+        inventoryId: checked.receivingInventoryId,
+        locationId: po.destinationLocationId,
+        transactionId: "",
         at: at(110),
         by: "operator.01",
       },
-      audit: [
-        ...checked.audit,
-        {
-          at: at(110),
-          by: "operator.01",
-          action: "Receipt confirmed — historical transaction TXN-HIST-" + String(1000 + i),
-          from: "QUALITY_CHECKED",
-          to: "RECEIVED",
-        },
-      ],
+      audit: [...checked.audit, { at: at(110), by: "operator.01", action: "Receipt confirmed", from: "QUALITY", to: "RECEIVED" }],
     })
   }
 
   // Newest arrivals first.
-  return records.sort(
-    (a, b) => new Date(b.expectedArrival).getTime() - new Date(a.expectedArrival).getTime(),
-  )
+  return records.sort((a, b) => new Date(b.expectedArrival).getTime() - new Date(a.expectedArrival).getTime())
 }
 
-/** A plausible reading for a parameter, within or near its specification. */
-function sampleReading(parameter: string, rand: () => number): string {
-  const round = (v: number, dp = 1) => v.toFixed(dp)
-  switch (parameter) {
-    case "CaO":
-      return round(50.5 + rand() * 3.5)
-    case "MgO":
-      return round(1.2 + rand() * 1.6)
-    case "SO₃":
-      return round(38.5 + rand() * 4)
-    case "Purity":
-      return round(86 + rand() * 8)
-    case "SiO₂":
-      return round(56 + rand() * 8)
-    case "Al₂O₃":
-      return round(16 + rand() * 5)
-    case "Chlorine":
-      return round(0.3 + rand() * 0.6, 2)
-    case "Ash":
-      return round(12 + rand() * 5)
-    case "Calorific Value":
-      return String(Math.round(4200 + rand() * 1800))
-    case "Visual inspection":
-      return "Satisfactory"
-    default:
-      return round(3 + rand() * 8)
-  }
-}
-
-export const MATERIAL_GROUP_OPTIONS = Array.from(
-  new Set(MATERIAL_CATALOG.map((m) => m.group)),
-)
+/** Material groups a delivery can be filtered by. */
+export const MATERIAL_GROUP_OPTIONS: string[] = [...MATERIAL_GROUPS]

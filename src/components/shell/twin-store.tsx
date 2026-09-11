@@ -7,24 +7,16 @@
  * makes "the selected asset must remain selected when changing views" structural
  * rather than something each view has to remember.
  *
- * It is also the wire between the functional blocks (§21): a QR count updates
- * inventory here, and the map, the 3D scene and the asset card all re-read it.
+ * It holds NO inventory. Stock is read from the one inventory store
+ * (pile-store → ledger) by every view; an earlier copy of the demo stock table
+ * lived here and ticked on its own, which would have been a second source of
+ * truth (§19), so it was removed.
  */
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react"
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react"
 
 import { FLOW_LINKS, TWIN_ASSETS } from "@/lib/assets/registry"
 import { DEFAULT_LAYERS, getAsset, type LayerId, type LayerState } from "@/lib/assets/selectors"
-import { inventoryProvider } from "@/lib/inventory/provider"
-import type { Adjustment, InventoryRecord } from "@/lib/inventory/types"
 
 export type ViewMode = "satellite" | "twin" | "hybrid"
 
@@ -37,35 +29,7 @@ function useTwinState() {
   /** Bumped to ask the active view to re-centre on the selection. */
   const [focusNonce, setFocusNonce] = useState(0)
   const [layers, setLayers] = useState<LayerState>(DEFAULT_LAYERS)
-  const [inventory, setInventory] = useState<Map<string, InventoryRecord>>(new Map())
-  const [adjustments, setAdjustments] = useState<Adjustment[]>([])
   const [scannerOpen, setScannerOpen] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-
-  const refreshInventory = useCallback(async () => {
-    const records = await inventoryProvider().list()
-    setInventory(new Map(records.map((r) => [r.inventoryLocationId, r])))
-    setAdjustments(await inventoryProvider().adjustments())
-    setLoaded(true)
-  }, [])
-
-  useEffect(() => {
-    void refreshInventory()
-  }, [refreshInventory])
-
-  // Live feed: the provider pushes, the whole twin re-reads. A real IMS
-  // subscription replaces the demo simulation with no change here.
-  const [live, setLive] = useState(true)
-  useEffect(() => {
-    if (!live) return
-    const provider = inventoryProvider()
-    if (!provider.subscribe) return
-    return provider.subscribe((records) => {
-      setInventory(new Map(records.map((r) => [r.inventoryLocationId, r])))
-      setLastTick(Date.now())
-    })
-  }, [live])
-  const [lastTick, setLastTick] = useState<number | null>(null)
 
   const select = useCallback((assetId: string | null) => setSelectedId(assetId), [])
 
@@ -87,11 +51,6 @@ function useTwinState() {
 
   const selected = useMemo(() => getAsset(selectedId), [selectedId])
 
-  const recordFor = useCallback(
-    (locationId?: string) => (locationId ? (inventory.get(locationId) ?? null) : null),
-    [inventory],
-  )
-
   return {
     assets: TWIN_ASSETS,
     links: FLOW_LINKS,
@@ -106,16 +65,8 @@ function useTwinState() {
     setHoveredId,
     layers,
     toggleLayer,
-    inventory,
-    recordFor,
-    adjustments,
-    refreshInventory,
-    loaded,
     scannerOpen,
     setScannerOpen,
-    live,
-    setLive,
-    lastTick,
   }
 }
 

@@ -40,6 +40,8 @@
   --color-verify: #c084fc;
 
   --color-demo: #f59e0b;
+  /* Label colour ON a demo fill. */
+  --color-demo-ink: #1a1204;
 
   --color-pile: #eab308;
   --color-process: #f472b6;
@@ -63,6 +65,13 @@
   /* Faint fill inside floating cards, and the ring on a selected marker. */
   --surface-tint: rgba(255, 255, 255, 0.06);
   --surface-ring: rgba(255, 255, 255, 0.85);
+  /* Opaque card ground — for cards that sit over labels or imagery. */
+  --surface-solid: #0c121c;
+  --surface-hover: rgba(255, 255, 255, 0.08);
+  /* How much of a raw status/asset colour survives when used as text. See
+     `toneText` — lifted slightly towards ink on dark (purple on a tinted chip
+     is otherwise ~4.3:1), darkened towards ink on light. */
+  --tone-keep: 85%;
 }
 
 /**
@@ -92,6 +101,7 @@
   --color-verify: #7c3aed;
 
   --color-demo: #b45309;
+  --color-demo-ink: #ffffff;
 
   --surface-float: rgba(255, 255, 255, 0.94);
   --surface-float-solid: rgba(255, 255, 255, 0.97);
@@ -102,6 +112,9 @@
   --map-backdrop: #e6ebf2;
   --surface-tint: rgba(15, 23, 32, 0.05);
   --surface-ring: rgba(15, 23, 32, 0.75);
+  --surface-solid: #ffffff;
+  --surface-hover: rgba(15, 23, 32, 0.06);
+  --tone-keep: 50%;
 }
 
 html,
@@ -134,6 +147,12 @@ body {
 .leaflet-control-attribution a {
   color: var(--color-ink-2) !important;
 }
+/* Fractional zoom scales tiles by non-integer factors, which leaves hairline
+   seams between them. A half-pixel overlap closes the gaps. */
+.leaflet-container img.leaflet-tile {
+  width: 256.5px !important;
+  height: 256.5px !important;
+}
 
 .twin-scroll::-webkit-scrollbar {
   width: 8px;
@@ -150,4 +169,26 @@ body {
 }
 .flow-line {
   animation: flow-dash 1.4s linear infinite;
+}
+
+/* A row just added from a form: tinted with an edge marker, shown for a few seconds. */
+.added-row > td {
+  background: color-mix(in srgb, var(--color-ok) 9%, transparent);
+}
+.added-row > td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-ok);
+}
+/* Secondary text is lifted a step on the tint so it stays readable. */
+.added-row .text-ink-3 {
+  color: var(--color-ink-2);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .added-row > td {
+    animation: added-in 700ms ease-out;
+  }
+}
+@keyframes added-in {
+  from {
+    background: color-mix(in srgb, var(--color-ok) 38%, transparent);
+  }
 }

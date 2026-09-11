@@ -1,41 +1,32 @@
 /**
  * Incoming Materials — record model.
  *
- * One incoming load is ONE record from PO identification through to receipt.
- * Weighing, quality and receipt are stages recorded on that record, never
- * separate documents, so the whole journey stays traceable under one ID.
+ * One incoming delivery is ONE record, from identification (QR scan or PO
+ * number) through weighing and quality to receipt. The receipt posts an
+ * INCOMING transaction into an inventory record; the record keeps that link.
  */
 
-/** The only workflow statuses. There is deliberately no UNLOADED stage. */
-export type IncomingStatus = "REGISTERED" | "WEIGHED" | "QUALITY_CHECKED" | "RECEIVED"
+/**
+ * The receiving flow. Status is the stage the record has reached:
+ * IDENTIFIED → WEIGHING (weight captured) → QUALITY (result recorded) →
+ * RECEIVED (inventory posted). There is no UNLOADED stage.
+ */
+export type IncomingStatus = "IDENTIFIED" | "WEIGHING" | "QUALITY" | "RECEIVED"
 
-export const STATUS_ORDER: IncomingStatus[] = [
-  "REGISTERED",
-  "WEIGHED",
-  "QUALITY_CHECKED",
-  "RECEIVED",
-]
+export const STATUS_ORDER: IncomingStatus[] = ["IDENTIFIED", "WEIGHING", "QUALITY", "RECEIVED"]
 
 export const STATUS_LABEL: Record<IncomingStatus, string> = {
-  REGISTERED: "Registered",
-  WEIGHED: "Weighed",
-  QUALITY_CHECKED: "Quality Checked",
+  IDENTIFIED: "Identified",
+  WEIGHING: "Weighing",
+  QUALITY: "Quality",
   RECEIVED: "Received",
 }
 
 export const STATUS_TONE: Record<IncomingStatus, string> = {
-  REGISTERED: "#60a5fa",
-  WEIGHED: "#eab308",
-  QUALITY_CHECKED: "#a855f7",
+  IDENTIFIED: "#60a5fa",
+  WEIGHING: "#eab308",
+  QUALITY: "#a855f7",
   RECEIVED: "#22c55e",
-}
-
-/** The action that advances a record from its current stage. */
-export const NEXT_ACTION: Record<IncomingStatus, string> = {
-  REGISTERED: "Proceed to Weighing",
-  WEIGHED: "Proceed to Quality",
-  QUALITY_CHECKED: "Confirm Receipt",
-  RECEIVED: "Receipt Completed",
 }
 
 export type Weighing = {
@@ -43,33 +34,43 @@ export type Weighing = {
   tareMt: number
   /** Derived: gross − tare. Never entered directly. */
   netMt: number
-  weighbridgeRef: string
   at: string
   by: string
 }
 
-export type QualityResult = "ACCEPTED" | "ACCEPTED_WITH_DEVIATION" | "REJECTED"
+export type QualityResult = "PASS" | "FAIL"
 
-export const QUALITY_LABEL: Record<QualityResult, string> = {
-  ACCEPTED: "Accepted",
-  ACCEPTED_WITH_DEVIATION: "Accepted with deviation",
-  REJECTED: "Rejected",
-}
+export type QualityReading = { parameter: string; value: string; unit?: string }
 
 export type Quality = {
-  readings: Array<{ parameter: string; value: string; unit?: string; spec?: string }>
   result: QualityResult
-  comments: string
+  notes: string
+  /** Whether a sample was tested. False when the grade's sampling plan skipped this delivery. */
+  tested: boolean
+  /** Grade-specific parameters, only where configured. */
+  readings: QualityReading[]
   at: string
   by: string
+}
+
+/** A sample drawn from the delivery for testing. */
+export type Sample = {
+  sampleId: string
+  collectedAt: string
+  collectedBy: string
 }
 
 export type Receipt = {
   receivedMt: number
   /** Received − expected. Informational only. */
   varianceMt: number
-  destinationLocationId: string
-  /** The inventory transaction this receipt posted. */
+  inventoryId: string
+  locationId: string
+  /** Lot / batch reference recorded at acceptance — only for lot-tracked materials. */
+  lotId?: string
+  /** Expiry date of the batch received — only for materials where expiry applies. */
+  expiryDate?: string
+  /** The INCOMING inventory transaction this receipt posted. */
   transactionId: string
   at: string
   by: string
@@ -86,17 +87,38 @@ export type AuditEntry = {
 export type IncomingRecord = {
   incomingId: string
   poNumber: string
+  /** Gate entry number, where the gate issues one. */
+  gateEntryNo?: string
+  /** Goods receipt note number. */
+  grnNo?: string
+  /** How the delivery was identified at the gate. */
+  identifiedBy: "QR" | "MANUAL"
   materialId: string
+  /** The grade the delivery is bought and tested against. */
+  gradeId?: string
   supplier: string
   expectedMt: number
   expectedArrival: string
+  /** PO's default receiving location. */
   destinationLocationId: string
+  /** Inventory record the receipt will post into. */
+  receivingInventoryId: string
+  vehicleRef?: string
+  batch?: string
+  origin?: string
   status: IncomingStatus
+  /**
+   * Whether this delivery must be sampled and tested before acceptance —
+   * decided at identification from the grade's sampling frequency.
+   */
+  sampleRequired: boolean
+  sample?: Sample
   weighing?: Weighing
   quality?: Quality
   receipt?: Receipt
   audit: AuditEntry[]
-  /** Demo, like every other figure in this build, until a PO system is wired in. */
+  /** PO number not found in the catalogue; details generated at the gate. */
+  adHoc?: boolean
   provenance: "DEMO" | "LIVE"
 }
 
@@ -107,6 +129,45 @@ export function actualMt(record: IncomingRecord): number | null {
   return null
 }
 
-export function canAdvance(record: IncomingRecord): boolean {
-  return record.status !== "RECEIVED"
+/**
+ * Quality position of a delivery, for the pending-quality view:
+ *   TEST PENDING    a sample is required and no result is recorded yet
+ *   NOT REQUIRED    the sampling plan skips this delivery and it is not yet accepted
+ *   PASSED / FAILED the recorded result
+ */
+export type QualityState = "TEST_PENDING" | "NOT_REQUIRED" | "PASSED" | "FAILED"
+
+export const QUALITY_STATE_LABEL: Record<QualityState, string> = {
+  TEST_PENDING: "TEST PENDING",
+  NOT_REQUIRED: "NO TEST REQUIRED",
+  PASSED: "PASSED",
+  FAILED: "FAILED",
+}
+
+export function qualityState(record: IncomingRecord): QualityState {
+  if (record.quality) return record.quality.result === "PASS" ? "PASSED" : "FAILED"
+  return record.sampleRequired ? "TEST_PENDING" : "NOT_REQUIRED"
+}
+
+/** The next action for a record, or null when there is none. */
+export function nextAction(record: IncomingRecord): string | null {
+  switch (record.status) {
+    case "IDENTIFIED":
+      return "Proceed to Weighing"
+    case "WEIGHING":
+      if (record.sampleRequired && !record.sample) return "Collect Sample"
+      return record.sampleRequired ? "Record Test Result" : "Accept Quality"
+    case "QUALITY":
+      return record.quality?.result === "PASS" ? "Confirm Receipt" : null
+    case "RECEIVED":
+      return null
+  }
+}
+
+/**
+ * Bulk materials in MT are weighed on the weighbridge (gross − tare = net).
+ * Anything held in another unit — drums, each — is counted instead.
+ */
+export function isCounted(uom: string | undefined): boolean {
+  return Boolean(uom) && uom !== "MT"
 }

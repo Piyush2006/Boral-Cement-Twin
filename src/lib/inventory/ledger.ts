@@ -1,62 +1,148 @@
 /**
  * Inventory transaction ledger.
  *
- * Every change to a balance is written here first, as a transaction with the
- * balance before and after. Balances are then moved by the recorded DELTA —
- * nothing overwrites an on-hand figure directly.
+ * Every change to a quantity is written here first, as a transaction carrying
+ * the balance before and after. The inventory record then moves by the
+ * transaction's DELTA — nothing overwrites a quantity directly.
  *
- *   Add Inventory → recordTransaction() → balance moves by qty
- *                                       → screens re-read → ledger shows it
+ *   INCOMING      (+)  delivery received after quality acceptance
+ *   RETURN        (+)  material issued but not used, back to its source
+ *   ADJUSTMENT    (±)  approved correction, with a reason; opening balances too
+ *   CONSUMPTION   (−)  material consumed by a consuming area (RM, IM, FG, SPARE)
+ *   ISSUE         (−)  only where the plant posts stock at issue instead
+ *   EXPIRY        (−)  stock past its expiry date, for expiry-tracked materials
+ *   WASTE         (−)  spillage, contamination or damage — a known loss
+ *   LOSS          (−)  material lost — a known loss with no usable output
+ *   UNACCOUNTED   (−)  a difference found with no identified cause
  *
- * This is the same mechanism the QR physical-count workflow uses, so counts and
- * receipts land in one history rather than two.
+ * The exact type is recorded on every movement, so the balance can always be
+ * rebuilt as previous + inward − expired − net consumed − losses ± adjustments.
  */
 
-export type TransactionType = "RECEIPT" | "COUNT_ADJUSTMENT" | "ISSUE"
+export type TransactionType =
+  | "INCOMING"
+  | "RETURN"
+  | "ADJUSTMENT"
+  | "CONSUMPTION"
+  | "ISSUE"
+  | "EXPIRY"
+  | "WASTE"
+  | "LOSS"
+  | "UNACCOUNTED"
+
+export const TRANSACTION_TYPES: TransactionType[] = [
+  "INCOMING",
+  "RETURN",
+  "ADJUSTMENT",
+  "CONSUMPTION",
+  "ISSUE",
+  "EXPIRY",
+  "WASTE",
+  "LOSS",
+  "UNACCOUNTED",
+]
+
+/** Outward exception outcomes: stock that left without being used productively. */
+export const LOSS_TYPES: TransactionType[] = ["EXPIRY", "WASTE", "LOSS", "UNACCOUNTED"]
+
+export type TransactionLinks = {
+  poNumber?: string
+  gateEntryNo?: string
+  grnNo?: string
+  incomingId?: string
+  /** The quality record that accepted the delivery (its Incoming ID + result). */
+  qualityRef?: string
+  issueId?: string
+  consumptionId?: string
+  returnId?: string
+  adjustmentId?: string
+  /** Internal lot the movement drew from or created. */
+  lotId?: string
+  /** Production order / work order the movement was made for. */
+  productionRef?: string
+  /** Where the material went, for issue and consumption movements. */
+  consumingAreaId?: string
+  /** Maintenance draws: the asset and the maintenance reference. */
+  assetId?: string
+  maintenanceRef?: string
+}
 
 export type InventoryTransaction = {
   txnId: string
   type: TransactionType
+  inventoryId: string
   locationId: string
   materialId: string
+  /** The grade held — stock limits and quality specification follow from it. */
+  gradeId: string
+  /** Internal lot, where the stock is lot-tracked. */
+  lotId?: string
   /** Signed movement in the material's UOM. */
   quantity: number
   uom: string
   balanceBefore: number
   balanceAfter: number
-  reference: string
+  reason?: string
+  reference?: string
+  notes?: string
+  batch?: string
+  links: TransactionLinks
   actor: string
   at: string
-  /** Carried from the balance the transaction moved. */
   provenance: "DEMO" | "LIVE"
 }
 
 const TYPE_LABEL: Record<TransactionType, string> = {
-  RECEIPT: "Receipt",
-  COUNT_ADJUSTMENT: "Count adjustment",
+  INCOMING: "Incoming",
+  RETURN: "Return",
+  ADJUSTMENT: "Adjustment",
+  CONSUMPTION: "Consumption",
   ISSUE: "Issue",
+  EXPIRY: "Expiry",
+  WASTE: "Waste",
+  LOSS: "Loss",
+  UNACCOUNTED: "Unaccounted",
 }
 
-export function transactionLabel(type: TransactionType): string {
+/** Label for a type; an adjustment carries its direction. */
+export function transactionLabel(type: TransactionType, quantity?: number): string {
+  if (type === "ADJUSTMENT" && quantity !== undefined) return quantity >= 0 ? "Adjustment (+)" : "Adjustment (−)"
   return TYPE_LABEL[type]
+}
+
+/** The references on a transaction, as one readable line. */
+export function transactionReference(t: InventoryTransaction): string {
+  const l = t.links
+  const parts = [
+    l.adjustmentId,
+    l.poNumber,
+    l.gateEntryNo,
+    l.grnNo,
+    l.incomingId,
+    l.issueId,
+    l.consumptionId,
+    l.returnId,
+    l.lotId,
+    l.maintenanceRef,
+    t.reference,
+  ].filter(Boolean)
+  return parts.length ? parts.join(" · ") : "—"
 }
 
 let ledger: InventoryTransaction[] = []
 const listeners = new Set<(txns: InventoryTransaction[]) => void>()
-
 let counter = 0
-function nextId(): string {
-  counter += 1
-  return `TXN-${Date.now().toString(36).toUpperCase()}-${counter.toString().padStart(3, "0")}`
-}
 
-/** Append a transaction. Callers apply the delta to the balance afterwards. */
+export const formatTxnId = (n: number) => `TX-${String(n).padStart(5, "0")}`
+
+/** Append a transaction. Callers apply the delta to the record afterwards. */
 export function recordTransaction(
   entry: Omit<InventoryTransaction, "txnId" | "at"> & { at?: string },
 ): InventoryTransaction {
+  counter += 1
   const txn: InventoryTransaction = {
     ...entry,
-    txnId: nextId(),
+    txnId: formatTxnId(counter),
     at: entry.at ?? new Date().toISOString(),
   }
   ledger = [txn, ...ledger]
@@ -64,8 +150,20 @@ export function recordTransaction(
   return txn
 }
 
-export function transactions(locationId?: string): InventoryTransaction[] {
-  return locationId ? ledger.filter((t) => t.locationId === locationId) : ledger
+/**
+ * Install the seeded history (oldest first). Idempotent: a second call from a
+ * remount or React strict mode leaves the ledger as it is.
+ */
+export function installLedger(history: InventoryTransaction[]): void {
+  if (ledger.length || counter) return
+  ledger = [...history].reverse()
+  counter = history.reduce((max, t) => Math.max(max, Number(t.txnId.slice(3)) || 0), 0)
+  for (const l of listeners) l(ledger)
+}
+
+/** Newest first. */
+export function transactions(inventoryId?: string): InventoryTransaction[] {
+  return inventoryId ? ledger.filter((t) => t.inventoryId === inventoryId) : ledger
 }
 
 export function subscribeLedger(fn: (txns: InventoryTransaction[]) => void): () => void {

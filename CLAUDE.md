@@ -1195,3 +1195,217 @@ Agreed with the client, 2026-09-09. These resolve open choices in the spec above
 7. **Priority for v1:** the spatial relationship and the twin experience over
    claimed positional accuracy. Build the plant as a connected system following
    the real layout visible in the imagery — not unrelated 3D objects on a map.
+
+# Inventory, Incoming & Issue/Consumption decisions
+
+Agreed against the client's operational specification, 2026-09-10. These are
+the points the specification left to the plant's process; each is
+configuration, not an assumption baked into the workflow.
+
+1. **Stock health has two states only.** `quantity > minStock` → HEALTHY,
+   otherwise CRITICAL (`src/lib/inventory/model.ts`). Maximum stock is shown for
+   reference and produces no status. Nothing in the UI names a third state.
+2. **Every quantity change is a ledger transaction** (`src/lib/inventory/ledger.ts`):
+   `INCOMING`, `MANUAL_ADJUSTMENT_IN`, `MANUAL_ADJUSTMENT_OUT`, `ISSUE`,
+   `CONSUMPTION` — one type per application action. Transactions are `TX-nnnnn`;
+   manual adjustments also carry `ADJ-nnnnn`. Balances move by the transaction's
+   delta; nothing overwrites a quantity. The demo's live feed no longer nudges
+   stock — there is no unexplained inventory movement.
+3. **Inventory identity.** An Inventory ID is unique and never reused. Records are
+   archived, not deleted, and only when empty, so history survives. One active
+   balance per material + location + batch.
+4. **Stock-posting point and approval** live in `src/config/issue-process.ts`:
+   inventory posts at consumption (the alternative, at issue, is supported and
+   tested); approval is off; over-consumption is refused. Each record captures
+   the settings in force when it was created.
+5. **Batch / lot is recorded, never inferred.** Entered at receipt or creation,
+   carried onto the transaction and the issue; shown as *Not recorded*
+   otherwise. Stockpiles blend deliveries, so an issue is linked to a receipt
+   only when the operator records the origin; other receipts are *possible*
+   origins, never links.
+6. **Incoming identification** is a QR tag (`berrima:po:PO-nnnnn`, camera via
+   html5-qrcode with image upload as fallback) or a typed PO number — both lead
+   to the same record. Statuses: IDENTIFIED → WEIGHING → QUALITY → RECEIVED; no
+   UNLOADED. Quality is PASS / FAIL with notes; per-material parameters are
+   configurable (`qualityParameters`) and none are configured. A FAIL holds the
+   delivery; nothing is received into inventory.
+7. **Seeded history is composed, not typed** (`src/lib/inventory/seed.ts`):
+   opening balances plus every seeded receipt, issue and consumption replay
+   through the ledger to today's figures, so a seeded balance traces exactly
+   like a live one.
+
+# Master data, lots and consumption decisions
+
+Agreed against the client's master-data specification, 2026-09-10. These extend
+the section above; where the two differ, this one is current.
+
+1. **Master data is Material → Grade → Location** (`src/lib/masters/`). A
+   material carries only master information. A **grade** sits under a material
+   and carries two separate things that are never mixed: **inventory
+   parameters** (minimum / target / maximum STOCK) and **quality parameters**
+   (any characteristic the plant tests, each with its own min / target / max and
+   unit). Quality parameters are **added by the user** — C, Si, S and Mn are
+   examples in the specification, not a hard-coded list, and a grade starts with
+   none.
+2. **An inventory balance is Material + Grade + Location + Quantity.** Stock
+   limits live on the GRADE and are read through `recordLimits()`, so changing a
+   grade's minimum changes every balance of that grade at once. A balance can no
+   longer carry its own minimum or maximum, and the edit form says so.
+3. **Locations are INVENTORY or CONSUMPTION.** Stock is held at the first and
+   used at the second; a consumption location never carries a balance and has no
+   capacity. Capacity is optional; where it is set the location reports
+   utilisation.
+4. **Internal lots** (`src/lib/inventory/lots.ts`) are the traceability spine:
+   PO → Gate Entry / GRN → Quality → Internal Lot → Inventory. A lot is created
+   when a delivery is released into stock, carries the readings it was released
+   on, and is stamped on the transaction that moved it. **Stockpiles blend
+   deliveries, so a pile balance is not tagged with one lot** — the lot stays on
+   the transactions.
+5. **Quality at receiving is driven by the grade's parameters.** Register a
+   parameter on the grade and the quality step asks for it and judges it against
+   the specification; register none and quality stays PASS / FAIL with notes.
+   Nothing is hard-coded per material any more.
+6. **Expiry applies only where the material says so** (`expiryApplicable`). The
+   form refuses an expiry date on a material where it does not apply, and the
+   expiry view lists only stock and lots that carry one. Expired stock is
+   written off from the management view as its own `EXPIRY` (−) transaction,
+   because expiry is a separate term in the balance — previous + inward −
+   expired − net consumed. It is neither a manual adjustment nor a consumption,
+   and it is counted as a loss.
+7. **Net Consumption = Gross Outward − Returned.** A return is a real inventory
+   movement, not a silent netting-off, so the ledger gains a sixth type,
+   `RETURN` (+), and expiry a seventh, `EXPIRY` (−), alongside the five in the
+   section above. Every consumption is
+   classified: Raw Material, Intermediate, Finished Goods, Spare, Expired,
+   Wasted, Unaccounted — the last three counted as loss, never as production.
+8. **Spare and maintenance draws are costed to a plant asset.** The issue form
+   requires the asset for a Spare-group material and the store refuses the draw
+   without one, so repeat consumers ("bad actors") surface rather than
+   disappearing into a general overhead.
+9. **Production readiness** (`src/lib/production/plan.ts`) is plan quantity ×
+   bill of materials against stock on hand. The plans and recipes are
+   CONFIGURED DEMO DATA and labelled as such — Boral has supplied neither, and a
+   textbook cement recipe presented as Berrima's would be a fabricated fact. The
+   arithmetic is real; the inputs are declared.
+10. **Navigation is a left sidebar with a Master menu** (user instruction,
+    2026-09-10, superseding the earlier "no new top-level menus" note):
+    Digital Twin (Satellite View · 3D View · Plant Flow) · Inventory ·
+    Master (Locations · Materials + Grades · Inventory) · Incoming ·
+    Issue & Consumption. Master holds registration — Location; Material +
+    Grade; and the inventory-record registry, where
+    Material + Grade + Location = Inventory. Internal lots and the management
+    view remain tabs inside Inventory. Inventory locations carry a storage
+    kind (pile, silo, warehouse, other); piles and silos are the locations
+    the Digital Twin shows.
+
+# Revised Inventory Management decisions
+
+From the client's revised specification ("Berrima Cement Works — Inventory
+Management System", 2026-09-11). Where these differ from the two sections
+above, **these are current**. The earlier text is kept for its reasoning.
+
+1. **Navigation** (supersedes master-data decision 10): Digital Twin ·
+   Inventory · Master (Locations · Materials + Grades) · Incoming ·
+   Issue & Consumption · Reports & Insights. Digital Twin is one sidebar entry;
+   its Satellite / 3D / Plant Flow views switch in the top bar inside the
+   module. Grades, transactions, quality, lots, gate entry, GRN, weighing,
+   returns, expiry and spares are never menus of their own.
+2. **Master defines what exists; it holds no stock.** Master → Inventory is
+   gone. Inventory records are created in the Inventory module by selecting an
+   existing Material + Grade and an existing Location; the Inventory ID is
+   auto-generated from the material code (`nextInventoryId`) and never reused.
+3. **Stock limits belong to the inventory record** (supersedes master-data
+   decision 2). Min / Target / Max are required on Create Inventory and editable
+   on the record, with every change in its audit trail. Grades carry no stock
+   figures, so the same grade can have different minimums at different
+   locations. A record starts at 0; an opening balance above 0 needs its
+   approval reference and posts as an ADJUSTMENT (+).
+4. **Locations** (supersedes master-data decision 3): Location Type is the
+   physical kind (Pile, Silo, Warehouse, Store, Production Area, Maintenance
+   Area, Other); "Used As" is Inventory, Consumption or Both, and only usage
+   decides what a location may do. Consuming areas are read from the Locations
+   master — there is no second list. Capacity is optional and never invented;
+   latitude / longitude, where given, link a location to the Digital Twin.
+5. **Materials + Grades are one master.** Material code, name, optional
+   category, UOM; each grade has a version, status, sampling frequency and
+   grade-specific parameters. Internal IDs are generated from the code.
+6. **Transaction types** (supersedes decision 2 of the first section and the
+   RETURN / EXPIRY note in decision 7 above): INCOMING, RETURN, ADJUSTMENT (±),
+   CONSUMPTION, EXPIRY, WASTE, LOSS, UNACCOUNTED — plus ISSUE only where a plant
+   posts at issue. A consumption classified as an exception outcome (EXPIRED,
+   WASTED, LOST, UNACCOUNTED) posts under that outcome's own type, and a direct
+   decrease on a balance records Adjustment (−), Waste, Loss or Unaccounted.
+7. **Lots are not a master or a menu** (supersedes master-data decision 4). A
+   lot / batch reference is recorded at receipt only for materials with
+   `lotTracking` on, carried on the INCOMING transaction and onto issues whose
+   origin receipt is linked. The Internal Lots tab is removed.
+8. **Incoming** records Gate Entry and GRN (proposed from the next free
+   numbers, editable, optional) with the PO. Sampling follows the grade's
+   frequency: a selected delivery must have its sample collected and a tested
+   result before acceptance and shows TEST PENDING until then; others are
+   accepted on inspection. Every INCOMING transaction carries PO, Gate Entry,
+   GRN, Incoming ID and the quality reference.
+9. **Returns are part of the gross outward.** A consumption records the gross
+   quantity drawn for the job; a later RETURN puts part of it back, so
+   Net Consumption = Gross Outward − Returned and stock moves by exactly the
+   net (issue 100, return 20 → stock −80). Only what actually left stock can
+   come back (`returnableQty`, used by the store, the button and the form):
+   posting at consumption, issued-but-unconsumed material never left the
+   balance, so it is released, not returned; and an exception outcome
+   (wasted, lost, expired, unaccounted) is never returnable — stock found
+   again is an Adjustment (+).
+12. **Return and expiry management live inside their modules** (user
+    request, 2026-09-11; the revised spec forbids top-level menus for them).
+    Issue & Consumption › Returns: net consumption by material, issues open
+    for return, the return register with each RETURN transaction, and
+    Record Return (pick the issue). Inventory › Expiry: Expired / Expiring
+    Soon / Healthy Shelf Life / No Expiry Date for expiry-tracked materials
+    only, Set / Change Expiry Date (reason required, audited, moves no stock)
+    and Write Off (EXPIRY −, only once expired), plus the write-off history.
+    Manual PO entry offers the open POs in a dropdown (in-progress POs shown
+    disabled) with typing kept for POs not in the list; the demo PO catalogue
+    is 60, of which the first 34 carry seeded deliveries.
+13. **Digital Twin views are Satellite and 3D** (user request, 2026-09-11):
+    Plant Flow is no longer routed (its component is kept, unreferenced) and
+    the Normal / Warning / Critical / Offline legend is gone from the 3D view.
+    **Every add form is a modal that closes on save and shows its result in
+    the list** (`src/components/shell/just-added.tsx`): filters that would
+    hide the new row are cleared, the row is scrolled into view and
+    highlighted, and a banner states what was added — Create Inventory, Add
+    Location, Add Material + Grade / Grade, Identify Delivery, Create Issue,
+    Record Consumption and Record Return. No success screen, and no jump into
+    a detail view.
+14. **Expiry is captured wherever dated stock enters or moves** (user
+    request, 2026-09-11). Switched on per material ("Expiry applies", Master
+    › Materials + Grades — the settings section is open by default, and it
+    cannot be switched off while dated stock is held). Dates are entered on
+    Create Inventory, at Incoming receipt (required for expiry materials,
+    refused for others, an already-expired batch is not received, and a
+    balance holding stock of another date is refused so shelf lives are
+    never blended; the balance, lot and receipt carry the date), and set or
+    changed with a reason from Inventory › Expiry or the record's detail
+    view. Expired stock cannot be issued (sources list soonest expiry first,
+    expired ones disabled) and is written off as EXPIRY. Traceability, the
+    inventory list and Reports show the date. Spares are counted, not
+    weighed: Incoming uses the material's UOM, and two configured spare POs
+    (PO-10305 lubricant, PO-10306 bearings) exercise it.
+11. **One source of truth, checked end to end.** Every quantity on every
+    screen — Inventory, Transactions, the map and 3D cards, Plant Flow and
+    Reports — is derived from the inventory records and the ledger in
+    `pile-store`; the twin store holds selection only, no stock. Reports date
+    their window from the latest data, so a posting is never newer than the
+    period that should contain it. `tests/data-sync.test.tsx` drives the real
+    stores through a working day and asserts after every step that each
+    record equals its transactions, the pile/silo figures equal their
+    records, the reports snapshot and value equal the records, and the
+    balance identity closes; refused actions must change nothing.
+10. **Reports & Insights** replaces the old Management tab: KPIs with
+    drill-down, critical stock, production readiness with days of inventory
+    from plan + BOM (usable stock ÷ planned daily consumption), quality KPIs
+    and pending quality, expiry (Expired / Expiring Soon ≤ 30 days / Healthy
+    Shelf Life), critical spares, maintenance material cost by asset /
+    maintenance reference / material, inventory value by material / grade /
+    location / group, location utilisation (current, average, peak over
+    Today / 7 / 30 days / custom, replayed from the ledger), and the balance
+    identity checked against the ledger. Costs, plans, BOMs and sampling plans
+    are configured demo data.

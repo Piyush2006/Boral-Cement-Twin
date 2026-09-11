@@ -5,3 +5,6 @@ out
 next-env.d.ts
 coverage
 .DS_Store
+
+# local static-server log
+.serve-*.log

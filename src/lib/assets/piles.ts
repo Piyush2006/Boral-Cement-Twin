@@ -12,15 +12,11 @@
  */
 
 import { fromLocalMetres, toLocalMetres, type LatLng } from "@/lib/map/projection"
+import type { StockStatus } from "@/lib/inventory/model"
 import type { MaterialId } from "./materials"
 
-/**
- * Pile stock status. NOTE: the client's design specifies three bands —
- * Healthy / Moderate / Critical — so "Moderate" exists here by explicit request,
- * overriding the two-band vocabulary in CLAUDE.md §24. When the real inventory
- * system is connected its own status values take over.
- */
-export type PileStatus = "HEALTHY" | "MODERATE" | "CRITICAL"
+/** Pile stock status — the inventory rule: HEALTHY or CRITICAL, nothing else. */
+export type PileStatus = StockStatus
 
 export type Pile = {
   /** Map label, e.g. PILE-RM-01. */

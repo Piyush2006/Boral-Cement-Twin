@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Berrima Cement Works Digital Twin — Project Summary</title>
+<style>
+  body { font-family: Calibri, "Segoe UI", Arial, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.45; }
+  h1 { font-size: 22pt; margin: 0 0 2pt; color: #0f2a44; }
+  h2 { font-size: 14pt; margin: 20pt 0 6pt; color: #0f2a44; border-bottom: 1px solid #c9d4de; padding-bottom: 3pt; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; color: #14507e; }
+  p, li { font-size: 11pt; }
+  ul { margin: 4pt 0 8pt 0; padding-left: 18pt; }
+  li { margin-bottom: 3pt; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; }
+  th, td { border: 1px solid #c9d4de; padding: 5pt 7pt; text-align: left; vertical-align: top; font-size: 10pt; }
+  th { background: #eef3f8; font-weight: bold; }
+  .sub { color: #55636f; font-size: 10.5pt; margin: 0 0 14pt; }
+  .chain { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; background: #f4f7fa;
+           border: 1px solid #c9d4de; padding: 7pt 9pt; margin: 6pt 0 10pt; }
+  .note { background: #fff8e8; border: 1px solid #e6d3a3; padding: 7pt 9pt; margin: 6pt 0 10pt; font-size: 10pt; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
+</style>
+</head>
+<body>
+
+<h1>Berrima Cement Works Digital Twin</h1>
+<p class="sub">Project summary — functional coverage &nbsp;|&nbsp; Boral Cement Works Berrima, Taylor Ave, New Berrima NSW &nbsp;|&nbsp; 10 September 2026</p>
+
+<h2>1. What has been built</h2>
+<p>A single web application that represents the Berrima plant digitally and runs the plant's material
+workflow on top of it. It is not a dashboard with a picture behind it: the plant is the workspace, and
+every quantity shown anywhere in the application comes from one inventory with one transaction ledger.</p>
+<p>The application has six views, reached from the top bar:</p>
+<table>
+  <tr><th style="width:23%">View</th><th>What it does</th></tr>
+  <tr><td><b>Satellite View</b></td><td>Live satellite imagery of the works with the plant's assets annotated on it. The geographic truth layer.</td></tr>
+  <tr><td><b>3D View</b></td><td>A stylised 3D twin laid out along the process line, from stockpiles through the kiln to dispatch.</td></tr>
+  <tr><td><b>Plant Flow</b></td><td>The process as a diagram, with live figures on each stage.</td></tr>
+  <tr><td><b>Inventory</b></td><td>Material balances by location, with minimum/maximum stock, stock health and the full transaction ledger.</td></tr>
+  <tr><td><b>Incoming Materials</b></td><td>Receiving deliveries: QR scan or PO entry, weighing, quality, receipt into inventory.</td></tr>
+  <tr><td><b>Issue &amp; Consumption</b></td><td>Releasing material to a consuming area and recording what was actually consumed, with full traceability.</td></tr>
+</table>
+
+<h2>2. Satellite View</h2>
+<ul>
+  <li>Live Esri World Imagery, fetched from the licensed provider with attribution always on screen. No imagery is downloaded, stitched or bundled.</li>
+  <li>Every asset carries a marker whose <b>shape and icon</b> differ by class, joined by a <b>leader line</b> to a readable card. Card placement is calculated automatically: cards never overlap each other, never cover another asset's marker, never sit under the header or panels, and never leave the screen.</li>
+  <li>Cards and lines stay attached to their asset while panning and zooming. A drag that starts on a card still pans the map.</li>
+  <li>Detail scales with zoom. At plant overview you see the major machines, silos and piles; zoom in and conveyors, utilities and minor units get labels, cards gain full detail, and the silo group splits into Silos 1–3.</li>
+  <li><b>Map Layers</b> panel: an Annotations on/off switch and filters for Machines, Piles, Storage, Conveyors, Utilities and Process Flow, plus a Material Type and Plant Assets legend.</li>
+  <li>Clicking any asset opens a closable <b>Asset Details</b> dialog — there is no permanent side panel. Piles and silos show live inventory (quantity, minimum, capacity, stock status) and open straight into the Inventory module.</li>
+  <li>Process connections are drawn only where the plant model supports them, subtly, never because two things look close together.</li>
+  <li>A standing note states that positions are indicative and may be approximate.</li>
+</ul>
+
+<h2>3. 3D Digital Twin, and Plant Flow</h2>
+<ul>
+  <li>The 3D twin is arranged along the process line so the flow reads end to end; at true geographic spacing the units overlap into one lump.</li>
+  <li>Units carry compact numbered tags; hovering opens a detail card beside the unit, clicking pins it. Tags stay put while the model is orbited.</li>
+  <li>Pile and silo cards now read their figures <b>from Inventory</b> — the twin holds no stock figures of its own. Process metrics (throughput, power, temperatures) are demo values and are labelled as such.</li>
+  <li>Plant Flow shows the same process as a diagram with the same asset IDs and the same live figures.</li>
+  <li>Both views use the same asset model and the same IDs as the satellite view.</li>
+</ul>
+
+<h2>4. Inventory</h2>
+<h3>The record</h3>
+<p>An inventory record is one balance: a material, at a storage location, optionally for a batch/lot,
+with its own minimum and maximum stock. The table shows Material, Inventory ID, Location, Quantity,
+UOM, Min Stock, Max Stock and Status, with search and filters for material group, location, status
+and archived records.</p>
+
+<h3>Stock health — two states only</h3>
+<div class="chain">quantity &gt; minimum  →  HEALTHY
+quantity ≤ minimum  →  CRITICAL</div>
+<p>There is no third state anywhere in the application. Maximum stock is shown for reference and
+produces no status. Status is recalculated after every transaction.</p>
+
+<h3>What you can do</h3>
+<ul>
+  <li><b>Add Inventory</b> — create a record (Material, Inventory ID, Storage Location, Quantity, UOM, Min, Max required; Batch/Lot, Description, Notes optional). The Inventory ID must be unique, the maximum must be at least the minimum, and the opening quantity arrives as a transaction. The confirmation shows the chain: record created → transaction created → balance updated → status calculated.</li>
+  <li><b>Add Stock / Remove Stock</b> — controlled adjustments, each requiring a quantity and a reason, with optional reference and notes. The system records the user, date/time, previous quantity, movement, new quantity, an Adjustment ID and a Transaction ID. A removal can never take a balance below zero.</li>
+  <li><b>Edit Details</b> — minimum, maximum, description and notes. Material, location, batch and quantity are not editable here: quantity moves only by transaction.</li>
+  <li><b>Archive</b> — records are archived, never deleted, and only once empty, so no history is destroyed. Archived records can be reactivated; their IDs are never reused.</li>
+  <li><b>Transactions</b> tab — the whole ledger with search and type filter, showing previous quantity, movement, new quantity and the references that explain each entry.</li>
+</ul>
+
+<h3>The ledger</h3>
+<p>Every quantity change is written as a transaction <i>before</i> the balance moves, and the balance
+then moves by that transaction's amount. Nothing overwrites a quantity. Five transaction types exist,
+one per application action:</p>
+<div class="chain">INCOMING · MANUAL_ADJUSTMENT_IN · MANUAL_ADJUSTMENT_OUT · ISSUE · CONSUMPTION</div>
+<p>Transactions are numbered <code>TX-00001</code>; manual adjustments also carry <code>ADJ-00001</code>.
+Each transaction keeps the references that explain it — PO, Incoming ID, Issue ID, Consumption ID,
+Adjustment ID, batch, reason.</p>
+
+<h2>5. Incoming Materials</h2>
+<div class="chain">QR SCAN or PO ENTRY → IDENTIFIED → WEIGHING → QUALITY → RECEIVED → INVENTORY</div>
+<ul>
+  <li><b>Scan QR</b> opens the device camera and reads the PO tag (<code>berrima:po:PO-10250</code>). Where there is no camera or access is refused, it says so plainly and offers an image upload and manual entry — scanning is never the only way in. Demo PO tags can be shown on screen for scanning.</li>
+  <li><b>Enter PO Manually</b> reaches the same record by the same route.</li>
+  <li>Either way, the PO's details are loaded and not re-typed: supplier, material, material code, expected quantity, UOM, expected arrival. An unknown PO number is accepted and flagged as not in the PO list rather than blocking the gate.</li>
+  <li>Receiving data captured at identification: Receiving Location (required, pre-selected from the PO), Vehicle/Delivery Reference, Batch/Lot and Source/Origin (all optional).</li>
+  <li><b>Weighing</b> takes gross and tare; net is derived, never typed.</li>
+  <li><b>Quality</b> is PASS/FAIL with notes. Per-material parameters are configurable and none are configured, so nothing is invented. A FAIL holds the delivery at Quality — it cannot be received into inventory.</li>
+  <li><b>Receipt</b> pre-fills the received quantity from the net weight, shows the variance against the PO and previews the inventory impact, then posts an INCOMING transaction into the chosen inventory record. A refused posting leaves the delivery exactly where it was.</li>
+  <li>The record shows its whole journey and the chain <code>PO → Incoming → Inventory +qty → Transaction</code>, with a link that traces where that stock was later used.</li>
+</ul>
+
+<h2>6. Issue &amp; Consumption</h2>
+<p>Issue and consumption are kept as separate events: material released from a location is not assumed
+to have been consumed.</p>
+<div class="chain">CHECK INVENTORY → CREATE ISSUE → (APPROVAL, if configured) → ISSUED
+                → ACTUAL CONSUMPTION → CONSUMED → INVENTORY TRANSACTION → BALANCE</div>
+<ul>
+  <li><b>Create Issue</b> requires Material, Source Location (an inventory record), Quantity, UOM and Consuming Area. Production/Process Reference, Reason, Notes and the origin receipt are <b>optional</b>.</li>
+  <li>The form checks stock before anything is created: on hand, committed to open issues, available to issue. A shortage is refused with the shortfall stated, and stock can never go negative.</li>
+  <li>It shows the modelled material movement — for example <i>PILE-RM-01 → Primary Crusher → Raw Mill</i> — or says plainly that the plant model has no route for that pair.</li>
+  <li><b>Record Consumption</b> requires the Issue ID, the consumed quantity and the date/time (which cannot be in the future or before the issue). Material, source, issued quantity, UOM, consuming area, PO, Incoming ID and batch are auto-filled.</li>
+  <li>The difference is preserved: issued 75 MT, consumed 70 MT, <b>5 MT not yet consumed</b> — never silently treated as consumed.</li>
+  <li>Consuming areas are the plant's own process units (Raw Mill, Kiln, Geocycle Co-processing, Cement Packing), not invented ones.</li>
+</ul>
+
+<h2>7. End-to-end traceability</h2>
+<p>The chain is complete and can be walked from either end. Every link is real: a link that was never
+recorded is shown as <i>Not linked</i>, and something the plant does not track is shown as
+<i>Not recorded</i>. Nothing is inferred into a link.</p>
+<div class="chain">PO-10250 → IN-00047 → RM-AF-006 (Alternate Fuel, PILE-RM-06) → ISS-00027
+        → CON-00058 → TX-00045 → 3,280 MT · CRITICAL</div>
+<ul>
+  <li><b>Backward</b> — from a Consumption ID, Issue ID, transaction or production reference, back through inventory to the receipt and the PO.</li>
+  <li><b>Forward</b> — from a PO or Incoming ID to the issues and consumption that drew on it.</li>
+  <li><b>Both at once</b> — from an Inventory ID: where the stock came from (receipts, adjustments in) and where it went (issues, consumption, adjustments out).</li>
+  <li>Any transaction ID resolves to whatever explains it.</li>
+  <li>The modules cross-link: Inventory and Incoming both open the Traceability view directly for the record in hand.</li>
+</ul>
+<div class="note"><b>An honest limitation, by design.</b> Stockpiles blend deliveries and are not lot-tracked.
+An issue is linked to a specific receipt only when the operator records that origin; otherwise the
+receipts into that inventory record are listed as <i>possible</i> origins and labelled as such.</div>
+
+<h2>8. Rules the plant can change</h2>
+<p>Where the specification left a decision to Berrima's process, it is configuration
+(<code>src/config/issue-process.ts</code>), not an assumption baked into the workflow. Each record also
+captures the settings in force when it was created, so changing a setting never rewrites history.</p>
+<table>
+  <tr><th style="width:34%">Setting</th><th style="width:22%">Current</th><th>Notes</th></tr>
+  <tr><td>Stock-posting point</td><td>At consumption</td><td>Posting at issue is fully supported and tested — the alternative was run end to end.</td></tr>
+  <tr><td>Approval before issue</td><td>Not required</td><td>When enabled the flow becomes Requested → Approved → Issued.</td></tr>
+  <tr><td>Over-consumption</td><td>Refused</td><td>Consuming more than was issued is blocked unless a rule permits it.</td></tr>
+  <tr><td>Shift recording</td><td>Not configured</td><td>The application has no shift structure, so none was invented.</td></tr>
+  <tr><td>Quality parameters</td><td>None configured</td><td>PASS/FAIL with notes; per-material parameters can be added.</td></tr>
+</table>
+
+<h2>9. Data honesty</h2>
+<ul>
+  <li>Every quantity is <b>Demo / Simulated</b> and labelled as such: Boral has supplied no stock figures. There is no second source of truth, and connecting the real inventory system replaces the seed without touching the workflow.</li>
+  <li>Asset positions are read from satellite imagery and shown as <b>Approximate</b>. Nothing is marked verified, because no survey or client coordinates exist yet.</li>
+  <li>Cement Silos 1–3 are demo objects, stated as configuration rather than Boral fact.</li>
+  <li>Berrima's single kiln (No. 6) is represented as one kiln. No fictitious equipment has been added.</li>
+  <li>The seeded history is <b>composed, not typed in</b>: opening balances plus every seeded receipt, issue and consumption replay through the ledger to today's figures. A seeded balance therefore traces exactly like a live one.</li>
+  <li>Demo content: 10 inventory records, 40 ledger transactions, 34 deliveries (16 received), 24 issues (15 consumed), 40 purchase orders, 24 plant assets.</li>
+</ul>
+<div class="note"><b>Removed during this work:</b> the demo's live feed used to nudge stock quantities every few
+seconds. That produced inventory movement with no transaction behind it, so it was taken out — there is
+now no unexplained change to any balance.</div>
+
+<h2>10. Interface and accessibility</h2>
+<ul>
+  <li>Full light and dark themes. Text contrast was audited automatically on every screen and dialog in both themes and meets the WCAG AA minimum.</li>
+  <li>Status is never colour alone — always colour plus a dot or icon plus the word.</li>
+  <li>Required fields carry <b>*</b>; optional fields do not. Anything the system already knows is shown, not asked for.</li>
+  <li>Operational actions happen in dialogs, so the user is never navigated away from the worklist.</li>
+  <li>The header holds its layout from 1280 px to 1920 px: the site card never wraps into the page, and tab labels collapse to icons before anything overflows.</li>
+</ul>
+
+<h2>11. Technology and delivery</h2>
+<table>
+  <tr><th style="width:28%">Area</th><th>Choice</th></tr>
+  <tr><td>Application</td><td>Next.js 16 (App Router, static export), React 19, TypeScript, Tailwind CSS v4</td></tr>
+  <tr><td>Map</td><td>Leaflet with Esri ArcGIS World Imagery, live tiles, no API key, attribution preserved; provider abstraction ready for Google Maps Platform</td></tr>
+  <tr><td>3D</td><td>Three.js with React Three Fiber and drei</td></tr>
+  <tr><td>QR</td><td>html5-qrcode for camera scanning and image decoding; qrcode for generating PO tags</td></tr>
+  <tr><td>Site centre</td><td>−34.5099, 150.3365 (the works, not Berrima township)</td></tr>
+  <tr><td>Delivery</td><td>Static export served on port 3999, published at berimatwin.iocompute.ai</td></tr>
+</table>
+
+<h2>12. Verification</h2>
+<ul>
+  <li><b>119 automated unit tests</b> across 6 files, all passing: stock-health rules, inventory validation, ledger behaviour, seeded-history consistency (opening balance plus movements equals every balance, and no balance ever dips below zero), issue and consumption rules, traceability in both directions, map label placement and the plant asset model.</li>
+  <li><b>A scripted end-to-end journey in a real browser</b>, in light and dark: the inventory table and its two statuses, creating a record, adding and removing stock, the archive guard, the ledger, scanning a QR tag through to a posted receipt, a failed quality hold, creating and issuing material, recording consumption, and tracing the result in both directions.</li>
+  <li>The journey confirms the numbers end to end — for example issue 75 MT, consume 70 MT, inventory falls by exactly 70 MT with a matching CONSUMPTION transaction, and 5 MT remains traceable as not yet consumed.</li>
+</ul>
+
+<h2>13. Open items</h2>
+<ul>
+  <li><b>Not yet committed or pushed.</b> The work is on the running site but not in GitHub; the token previously shared should be treated as revoked, so a fresh credential is needed to push.</li>
+  <li><b>Integration API not connected.</b> All inventory is demo data until the real inventory system is wired to the provider seam.</li>
+  <li><b>Positions need validation.</b> Every asset position, pile outline, capacity and ID should be confirmed against plant records. Cement Mill is placed from the client's annotated site image; Geocycle is deliberately not placed on the map because its location is unverified.</li>
+  <li><b>Assets not modelled:</b> Coal Mill, Ball Mill, Slag Mill and Pump House are not in the application; each needs an approximate location before it can be added.</li>
+  <li><b>Decisions to confirm:</b> the stock-posting point, whether issues require approval, quality parameters per material, and whether shifts are recorded.</li>
+  <li>QR camera scanning needs an HTTPS page and camera permission; image upload and manual entry cover every other case.</li>
+</ul>
+
+</body>
+</html>

@@ -9,7 +9,7 @@
  * the header note both state.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { ContactShadows, Environment, OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
@@ -19,15 +19,15 @@ import { DRIFTING, TWIN_CARDS } from "@/lib/assets/twin-cards"
 import { NODE_LIFT, node } from "@/lib/twin/process-layout"
 import { usePiles } from "@/components/shell/pile-store"
 import { PlantScene } from "./PlantScene"
-import { TwinCards } from "./TwinCards"
+import { TwinCards, type LiveInventory } from "./TwinCards"
 import { createHandles, type AnnotationHandles } from "./projection"
-import { MapControls, StatusLegend } from "./TwinChrome"
+import { MapControls } from "./TwinChrome"
 
 const CAMERA_START: [number, number, number] = [-70, 700, 800]
 const TARGET = new THREE.Vector3(10, 30, 30)
 
 export function DigitalTwinView() {
-  const { selectedId, select, live } = usePiles()
+  const { selectedId, select, live, records, silos, query, mode } = usePiles()
   // Shared with the render loop; never a React state update per frame.
   const handles = useRef<AnnotationHandles>(createHandles())
   const [metrics, setMetrics] = useState<Record<string, string>>({})
@@ -53,6 +53,15 @@ export function DigitalTwinView() {
     return () => clearInterval(t)
   }, [live])
 
+  /* Pile and silo figures on the cards — read from Inventory, never stored here. */
+  const inventoryView = useMemo<LiveInventory>(
+    () => ({
+      pile: (id) => records.find((r) => r.pileId === id),
+      silo: (id) => silos.find((s) => s.id === id),
+    }),
+    [records, silos],
+  )
+
   const zoom = useCallback((delta: number) => {
     const c = controls.current
     if (!c) return
@@ -74,6 +83,10 @@ export function DigitalTwinView() {
   return (
     <div ref={host} className="absolute inset-0 bg-[#0a1018]">
       <Canvas
+        // The view stays mounted so switching back is instant, but it renders
+        // only while it is the visible view — hidden, it would keep the GPU busy
+        // and slow every other screen.
+        frameloop={mode === "twin" ? "always" : "never"}
         shadows
         dpr={[1, 2]}
         camera={{ position: CAMERA_START, fov: 36, near: 1, far: 9000 }}
@@ -122,13 +135,14 @@ export function DigitalTwinView() {
       <TwinCards
         handles={handles.current}
         metrics={metrics}
+        inventory={inventoryView}
+        query={query}
         selected={selectedId}
         onSelect={select}
         hovered={hovered}
         onHover={setHovered}
       />
 
-      <StatusLegend />
       <MapControls onZoom={zoom} onFullscreen={fullscreen} />
     </div>
   )
