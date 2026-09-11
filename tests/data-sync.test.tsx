@@ -30,6 +30,7 @@ import { consumptionTransactionType } from "@/lib/issues/consumption"
 import { netConsumedQty, returnedQty } from "@/lib/issues/types"
 import { consumptionLocations } from "@/lib/masters/registry"
 import { balanceIdentity, movementTotals, snapshotAt, snapshotTotals } from "@/lib/reports/insights"
+import { expiryBalance } from "@/lib/inventory/expiry"
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <PileProvider>
@@ -159,133 +160,142 @@ describe("data stays in sync across Inventory, Incoming, Issue & Consumption, th
     resetMasters()
   })
 
-  it("expiry management: dates move no stock, are audited, and only expired stock is written off", async () => {
-    const { result, unmount } = await mount()
-    const app = () => result.current
-    const before = assertInSync(app(), "expiry start")
-
-    // Not for materials where expiry does not apply.
-    const limestone = app().piles.inventory.find((r) => r.materialId === "MAT-LIMESTONE")!
-    act(() => void expect(app().piles.setExpiryDate(limestone.inventoryId, "2027-01-01T00:00:00.000Z", "Test").ok).toBe(false))
-    expect(app().piles.recordOf(limestone.inventoryId)!.expiryDate).toBeUndefined()
-
-    // An expiry-tracked balance still in date.
-    const lub = app().piles.inventory.find((r) => r.active && materialEntry(r.materialId)?.expiryApplicable && r.expiryDate && new Date(r.expiryDate).getTime() > Date.now())!
-    expect(lub).toBeTruthy()
-    const q = lub.quantity
-    const auditBefore = lub.audit.length
-    // A reason is required.
-    act(() => void expect(app().piles.setExpiryDate(lub.inventoryId, "2027-03-31T00:00:00.000Z", " ").ok).toBe(false))
-    // Writing off stock that has not expired is refused.
-    act(() => void expect(app().piles.writeOffExpired(lub.inventoryId, 1, "Early").ok).toBe(false))
-    expect(assertInSync(app(), "refusals")).toEqual(before)
-
-    // Correct the date into the past (label misread): no quantity moves, the audit records old → new.
-    const past = new Date(Date.now() - 2 * 86_400_000).toISOString()
-    act(() => void expect(app().piles.setExpiryDate(lub.inventoryId, past, "Drum label shows an earlier date").ok).toBe(true))
-    const after = app().piles.recordOf(lub.inventoryId)!
-    expect(after.quantity).toBe(q)
-    expect(after.expiryDate).toBe(new Date(past).toISOString())
-    expect(after.audit).toHaveLength(auditBefore + 1)
-    expect(after.audit.at(-1)!.action).toMatch(/Expiry date changed .* → .* — Drum label shows an earlier date/)
-    expect(assertInSync(app(), "date changed")).toEqual(before)
-
-    // Now expired: the write-off posts EXPIRY (−) and every figure follows.
-    act(() => void expect(app().piles.writeOffExpired(lub.inventoryId, q, "Past expiry").ok).toBe(true))
-    expect(app().piles.recordOf(lub.inventoryId)!.quantity).toBe(0)
-    const txn = app().piles.ledger[0]
-    expect(txn).toMatchObject({ type: "EXPIRY", inventoryId: lub.inventoryId, quantity: -q, balanceBefore: q, balanceAfter: 0 })
-    assertInSync(app(), "expiry write-off")
-    unmount()
-  })
-
-  it("expiry at Incoming: counted, dated, never blended, and expired stock is never issued", async () => {
+  it("expiry comes from the PO, flows through Incoming and the GRN into dated batches, and leaves by EXPIRY", async () => {
     const { result, unmount } = await mount()
     const app = () => result.current
     const rec = (id: string) => app().piles.recordOf(id)!
-    const { allLots } = await import("@/lib/inventory/lots")
+    const open = (id: string) => app().piles.expiryOf(id).open
 
-    // PO-10305 is Gear Lubricant in DRUM — expiry-tracked and lot-tracked.
+    // Seeded: the lubricant batch that reached its date on 8 Sept left by an EXPIRY transaction.
+    const seeded = app().piles.ledger.find((t) => t.type === "EXPIRY" && t.inventoryId === "SP-LUB-002")!
+    expect(seeded).toMatchObject({ actor: "system.expiry", quantity: -2 })
+    expect(seeded.links.batchId).toBeTruthy()
+    expect(rec("SP-LUB-002").quantity).toBe(0)
+
+    // The specification's worked example: PO-10250, SRF, 75 MT received, expiry
+    // 25 Oct 2026 from the PO — 75 MT available in a dated batch traced to its GRN.
+    expect(open("RM-AF-006").find((b) => b.poNumber === "PO-10250")).toMatchObject({
+      receivedQty: 75, remaining: 75, expiryDate: "2026-10-25T00:00:00.000Z", grnNo: "GRN-00405", source: "INCOMING",
+    })
+
+    // An SRF PO states the batch expiry. The receipt carries it — nobody re-enters it.
+    const po = PURCHASE_ORDERS.find((p) => p.materialId === "MAT-ALT-FUEL" && p.expiryDate && !app().incoming.records.some((r) => r.poNumber === p.poNumber))!
+    expect(po).toBeTruthy()
     let incomingId = ""
     act(() => {
       const r = app().incoming.register({
-        poNumber: "PO-10305", identifiedBy: "MANUAL", receivingInventoryId: "SP-LUB-002",
-        gateEntryNo: "", grnNo: "", vehicleRef: "", batch: "", origin: "",
+        poNumber: po.poNumber, identifiedBy: "MANUAL", receivingInventoryId: "RM-AF-006",
+        gateEntryNo: "GE-09100", grnNo: "GRN-09100", vehicleRef: "", batch: "", origin: "",
       })
       expect(r.ok, r.ok ? "" : r.error).toBe(true)
       if (r.ok) incomingId = r.value.incomingId
     })
-    // Counted, not weighed: the count is the net.
-    act(() => void expect(app().incoming.recordWeighing(incomingId, { grossMt: 12, tareMt: 0 }).ok).toBe(true))
-    act(() => void expect(app().incoming.recordQuality(incomingId, { result: "PASS", notes: "", readings: [] }).ok).toBe(true))
-    const before = assertInSync(app(), "lubricant before receipt")
-    const receive = (expiryDate?: string, into = "SP-LUB-002") =>
-      app().incoming.confirmReceipt(incomingId, { receivedMt: 12, receivingInventoryId: into, expiryDate })
-
-    // Required, not already expired, and never blended into stock of another date.
-    act(() => void expect(receive(undefined).ok).toBe(false))
-    act(() => void expect(receive("2026-01-31T00:00:00.000Z").ok).toBe(false))
-    let blended: { ok: boolean; error?: string } = { ok: true }
-    act(() => void (blended = receive("2027-03-31T00:00:00.000Z") as typeof blended))
-    expect(blended.ok).toBe(false)
-    expect(blended.error).toMatch(/SP-LUB-002 holds 2 DRUM expiring 31 Aug 2026/)
-    expect(assertInSync(app(), "refused receipts")).toEqual(before)
-
-    // Write off the expired drums; the empty record then takes the new batch and its date.
-    act(() => void expect(app().piles.writeOffExpired("SP-LUB-002", 2, "Past expiry").ok).toBe(true))
-    act(() => void expect(receive("2027-03-31T00:00:00.000Z").ok).toBe(true))
-    expect(rec("SP-LUB-002").quantity).toBe(12)
-    expect(rec("SP-LUB-002").expiryDate).toBe("2027-03-31T00:00:00.000Z")
-    const delivery = app().incoming.records.find((r) => r.incomingId === incomingId)!
-    expect(delivery.receipt?.expiryDate).toBe("2027-03-31T00:00:00.000Z")
-    const newLot = allLots().find((l) => l.incomingId === incomingId)!
-    expect(newLot.expiryDate).toBe("2027-03-31T00:00:00.000Z")
-    // The emptied record now names the batch it holds, not the one written off.
-    expect(rec("SP-LUB-002").lotId).toBe(newLot.lotId)
-    expect(delivery.receipt?.lotId).toBe(newLot.lotId)
-    expect(rec("SP-LUB-002").audit.at(-1)!.action).toMatch(
-      new RegExp(`Expiry date changed 31 Aug 2026 → 31 Mar 2027, lot LUB-2025-08 → ${newLot.lotId} — Received with ${incomingId}`),
-    )
-    assertInSync(app(), "lubricant received")
-
-    // A material where expiry does not apply refuses an expiry date.
-    let bearing = ""
+    expect(app().incoming.records.find((r) => r.incomingId === incomingId)!.poExpiryDate).toBe(po.expiryDate)
+    act(() => void expect(app().incoming.recordWeighing(incomingId, { grossMt: 200, tareMt: 20 }).ok).toBe(true))
+    const delivery = () => app().incoming.records.find((r) => r.incomingId === incomingId)!
+    if (delivery().sampleRequired) act(() => void app().incoming.collectSample(incomingId))
+    const readings = qualityParameters(delivery().gradeId).map((q) => ({ parameter: q.parameter, unit: q.unit, value: String(q.target ?? q.min ?? q.max ?? 0) }))
+    act(() => void expect(app().incoming.recordQuality(incomingId, { result: "PASS", notes: "", readings }).ok).toBe(true))
     act(() => {
-      const r = app().incoming.register({
-        poNumber: "PO-10306", identifiedBy: "MANUAL", receivingInventoryId: "SP-BRG-001",
-        gateEntryNo: "", grnNo: "", vehicleRef: "", batch: "", origin: "",
-      })
-      if (r.ok) bearing = r.value.incomingId
+      const r = app().incoming.confirmReceipt(incomingId, { receivedMt: 180, receivingInventoryId: "RM-AF-006" })
+      expect(r.ok, r.ok ? "" : r.error).toBe(true)
     })
-    act(() => void app().incoming.recordWeighing(bearing, { grossMt: 4, tareMt: 0 }))
-    act(() => void app().incoming.recordQuality(bearing, { result: "PASS", notes: "", readings: [] }))
-    act(() => {
-      const r = app().incoming.confirmReceipt(bearing, { receivedMt: 4, receivingInventoryId: "SP-BRG-001", expiryDate: "2027-01-01T00:00:00.000Z" })
-      expect(r.ok).toBe(false)
+    const inTxn = app().piles.ledger.find((t) => t.type === "INCOMING" && t.links.incomingId === incomingId)!
+    const poExpiry = new Date(po.expiryDate!).toISOString()
+    expect(inTxn.expiryDate).toBe(poExpiry)
+    expect(delivery().receipt?.expiryDate).toBe(poExpiry)
+    // PO → Incoming → GRN → Inventory: the dated batch keeps its PO and GRN.
+    expect(open("RM-AF-006").find((b) => b.batchId === inTxn.txnId)).toMatchObject({
+      remaining: 180, expiryDate: poExpiry, poNumber: po.poNumber, grnNo: "GRN-09100", incomingId,
     })
-    act(() => void expect(app().incoming.confirmReceipt(bearing, { receivedMt: 4, receivingInventoryId: "SP-BRG-001" }).ok).toBe(true))
+    assertInSync(app(), "SRF received")
 
-    // Expired stock is not issued.
-    const maint = consumptionLocations().find((l) => l.locationId === "MAINT-01")!
-    act(() => void expect(app().piles.setExpiryDate("SP-LUB-001", new Date(Date.now() - 86_400_000).toISOString(), "Label re-read").ok).toBe(true))
-    let refused: { ok: boolean; error?: string } = { ok: true }
-    act(() => {
-      refused = app().issues.createIssue(
-        { materialId: "MAT-SPARE-LUBRICANT", sourceInventoryId: "SP-LUB-001", quantity: 1, consumingAreaId: maint.locationId, productionRef: "", reason: "", notes: "", assetId: "KLN-01" },
-        true,
-      ) as typeof refused
-    })
-    expect(refused.ok).toBe(false)
-    expect(refused.error).toMatch(/SP-LUB-001 expired on .* not issued/)
-    // The in-date batch can be.
+    // First expiry, first out: consumption draws the soonest-expiring batch; a return goes back to it.
+    const soonest = open("RM-AF-006")[0]
+    const area = consumptionLocations().find((l) => l.locationId === "GEO-01") ?? consumptionLocations()[0]
+    let issueId = ""
     act(() => {
       const r = app().issues.createIssue(
-        { materialId: "MAT-SPARE-LUBRICANT", sourceInventoryId: "SP-LUB-002", quantity: 1, consumingAreaId: maint.locationId, productionRef: "", reason: "", notes: "", assetId: "KLN-01" },
+        { materialId: "MAT-ALT-FUEL", sourceInventoryId: "RM-AF-006", quantity: 10, consumingAreaId: area.locationId, productionRef: "", reason: "", notes: "" },
         true,
       )
       expect(r.ok, r.ok ? "" : r.error).toBe(true)
+      if (r.ok) issueId = r.value.issueId
     })
-    assertInSync(app(), "expiry end")
+    act(() => void expect(app().issues.recordConsumption(issueId, { consumedQty: 10, at: new Date().toISOString(), productionRef: "", comments: "", category: "RAW_MATERIAL" }).ok).toBe(true))
+    const conTxn = app().piles.ledger.find((t) => t.type === "CONSUMPTION" && t.links.issueId === issueId)!
+    expect(app().piles.batchIndex.allocations.get(conTxn.txnId)).toEqual([{ batchId: soonest.batchId, qty: 10 }])
+    expect(open("RM-AF-006")[0].remaining).toBeCloseTo(soonest.remaining - 10, 6)
+    act(() => void expect(app().issues.returnMaterial(issueId, 4, "Surplus").ok).toBe(true))
+    expect(open("RM-AF-006")[0].remaining).toBeCloseTo(soonest.remaining - 6, 6)
+    assertInSync(app(), "FEFO and return")
+
+    // The expiry run: once the soonest batch reaches its date, its remaining
+    // quantity is Expired and leaves by an EXPIRY transaction — traced to the batch.
+    const due = new Date(new Date(soonest.expiryDate!).getTime() + 1000)
+    const left = open("RM-AF-006")[0].remaining
+    const before = rec("RM-AF-006").quantity
+    let posted: ReturnType<App["piles"]["postDueExpiries"]> = []
+    act(() => void (posted = app().piles.postDueExpiries(due)))
+    const exp = posted.find((t) => t.inventoryId === "RM-AF-006")!
+    expect(exp).toMatchObject({ type: "EXPIRY", quantity: -left, actor: "system.expiry" })
+    expect(exp.links.batchId).toBe(soonest.batchId)
+    expect(exp.reason).toMatch(/Reached expiry date/)
+    expect(rec("RM-AF-006").quantity).toBeCloseTo(before - left, 6)
+    expect(app().piles.expiryOf("RM-AF-006", due).duePendingQty).toBe(0)
+    // Idempotent: nothing left to expire at that moment.
+    act(() => void expect(app().piles.postDueExpiries(due)).toHaveLength(0))
+    // Previous + Inward − Expired − Net Consumed (± other) = Current Available, from the ledger.
+    const bal = expiryBalance(app().piles.ledger, "RM-AF-006", 0, Date.now() + 60_000)
+    expect(bal.current).toBeCloseTo(rec("RM-AF-006").quantity, 6)
+    expect(bal.expired).toBeCloseTo(left, 6)
+    assertInSync(app(), "after the expiry run")
+    unmount()
+  })
+
+  it("shelf life on the PO dates the batch at receipt; expiry is never asked of other materials", async () => {
+    const { result, unmount } = await mount()
+    const app = () => result.current
+    const receive = (poNumber: string, into: string, qty: number, expiryDate?: string) => {
+      let id = ""
+      act(() => {
+        const r = app().incoming.register({ poNumber, identifiedBy: "MANUAL", receivingInventoryId: into, gateEntryNo: "", grnNo: "", vehicleRef: "", batch: "", origin: "" })
+        expect(r.ok, r.ok ? "" : r.error).toBe(true)
+        if (r.ok) id = r.value.incomingId
+      })
+      act(() => void app().incoming.recordWeighing(id, { grossMt: qty, tareMt: 0 }))
+      act(() => void app().incoming.recordQuality(id, { result: "PASS", notes: "", readings: [] }))
+      let out: { ok: boolean; error?: string } = { ok: false }
+      act(() => void (out = app().incoming.confirmReceipt(id, { receivedMt: qty, receivingInventoryId: into, expiryDate }) as typeof out))
+      return { id, out }
+    }
+
+    // PO-10305 states an 540-day shelf life, counted from the day of receipt.
+    const lub = receive("PO-10305", "SP-LUB-002", 12)
+    expect(lub.out.ok, lub.out.error).toBe(true)
+    const txn = app().piles.ledger.find((t) => t.links.incomingId === lub.id)!
+    const today = new Date()
+    today.setUTCHours(0, 0, 0, 0)
+    expect(txn.expiryDate).toBe(new Date(today.getTime() + 540 * 86_400_000).toISOString())
+    expect(app().piles.expiryOf("SP-LUB-002").open.map((b) => b.remaining)).toEqual([12])
+
+    // Bearings: expiry does not apply, so a date is refused and none is recorded.
+    const refused = receive("PO-10306", "SP-BRG-001", 4, "2027-01-01T00:00:00.000Z")
+    expect(refused.out.ok).toBe(false)
+    act(() => void expect(app().incoming.confirmReceipt(refused.id, { receivedMt: 4, receivingInventoryId: "SP-BRG-001" }).ok).toBe(true))
+    expect(app().piles.ledger.find((t) => t.links.incomingId === refused.id)!.expiryDate).toBeUndefined()
+    expect(app().piles.expiryOf("SP-BRG-001").open).toHaveLength(0)
+
+    // An opening balance loaded without a date is visible as undated stock.
+    act(() => {
+      const r = app().piles.createInventory({
+        materialId: "MAT-ALT-FUEL", gradeId: "GRD-AF-SRF", inventoryId: "RM-AF-900", locationId: "PILE-RM-07",
+        quantity: 50, openingReference: "APP-2026-020", uom: "MT", minStock: 0, targetStock: 50, maxStock: 100,
+      })
+      expect(r.ok, r.ok ? "" : r.error).toBe(true)
+    })
+    expect(app().piles.expiryOf("RM-AF-900").undatedQty).toBe(50)
+    assertInSync(app(), "shelf life")
     unmount()
   })
 
@@ -544,22 +554,6 @@ describe("data stays in sync across Inventory, Incoming, Issue & Consumption, th
     // 80 net on the first issue + 70 net on the partial one; the wasted 10 is a loss, not consumption.
     expect(movementTotals(app().piles.ledger, day, "MT").netConsumed).toBeCloseTo(150, 6)
     expect(movementTotals(app().piles.ledger, day, "MT").losses.WASTE).toBeCloseTo(40, 6)
-
-    /* ── Expiry write-off: EXPIRY (−), only once expired ───────────────── */
-    const expired = app().piles.inventory.find((r) => r.active && r.expiryDate && new Date(r.expiryDate).getTime() < Date.now() && r.quantity > 0)
-    if (expired) {
-      const q = expired.quantity
-      act(() => void expect(app().piles.writeOffExpired(expired.inventoryId, q, "Past expiry").ok).toBe(true))
-      expect(qty(expired.inventoryId)).toBe(0)
-      expect(app().piles.ledger[0].type).toBe("EXPIRY")
-      assertInSync(app(), "expiry write-off")
-    }
-    const inDate = app().piles.inventory.find((r) => r.active && r.expiryDate && new Date(r.expiryDate).getTime() > Date.now() && r.quantity > 0)
-    if (inDate) {
-      const beforeEarly = assertInSync(app(), "before early write-off")
-      act(() => void expect(app().piles.writeOffExpired(inDate.inventoryId, 1, "Early").ok).toBe(false))
-      expect(assertInSync(app(), "early write-off refused")).toEqual(beforeEarly)
-    }
 
     /* ── Archive only when empty; an archived record takes no movement ── */
     act(() => void expect(app().piles.archiveInventory(created, "Grade B stock moved").ok).toBe(false))

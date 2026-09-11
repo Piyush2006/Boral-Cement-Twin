@@ -220,7 +220,7 @@ function Screen() {
                       {/* Text label always present; colour is secondary. */}
                       <span
                         className="inline-flex items-center gap-1.5 rounded-full px-2 py-[2px] text-[11px] font-semibold"
-                        style={{ color: toneText(tone), background: `${tone}1f` }}
+                        style={{ color: toneText(tone), background: `${tone}14` }}
                       >
                         <span className="h-2 w-2 rounded-full" style={{ background: tone }} />
                         {STATUS_LABEL[r.status].toUpperCase()}

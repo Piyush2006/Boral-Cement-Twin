@@ -68,8 +68,6 @@ export function validateIssueDraft(draft: IssueDraft, source: InventoryRecord | 
   if (!material) return { ok: false, error: "Select a material." }
   if (!source) return { ok: false, error: "Select the source location." }
   if (!source.active) return { ok: false, error: `${source.inventoryId} is archived.` }
-  const expired = expiredOn(source)
-  if (expired) return { ok: false, error: expired }
   if (source.materialId !== draft.materialId) {
     return { ok: false, error: `${source.inventoryId} does not hold ${material.name}.` }
   }
@@ -151,12 +149,3 @@ export function validateConsumption(
   return { ok: true }
 }
 
-/**
- * Expired stock is not issued: it is written off under Inventory › Expiry.
- * Returns the reason, or null where the balance is usable.
- */
-export function expiredOn(source: Pick<InventoryRecord, "inventoryId" | "expiryDate">, now: Date = new Date()): string | null {
-  if (!source.expiryDate || new Date(source.expiryDate).getTime() >= now.getTime()) return null
-  const day = new Date(source.expiryDate).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
-  return `${source.inventoryId} expired on ${day}. Expired stock is not issued — write it off under Inventory › Expiry.`
-}

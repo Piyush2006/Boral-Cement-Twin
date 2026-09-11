@@ -25,10 +25,11 @@ import { traceInventory } from "@/lib/issues/trace"
 import { ISSUE_STATUS_LABEL, inventoryTransactionId } from "@/lib/issues/types"
 import { toneText } from "@/lib/theme/tone"
 import { StatusBadge } from "./StatusBadge"
-import { ExpiryWriteOffModal, SetExpiryModal } from "./Expiry"
+import { ExpiryPill, expiryDay } from "./Expiry"
+import { batchStatus, daysToExpiry } from "@/lib/inventory/expiry"
 import { TYPE_TONE, stampFull } from "./TransactionsView"
 
-type Dialog = "add" | "remove" | "edit" | "archive" | "expiry" | "writeoff" | null
+type Dialog = "add" | "remove" | "edit" | "archive" | null
 
 const DECREASE_HINT: Record<DecreaseType, string> = {
   ADJUSTMENT: "An approved correction, e.g. after a physical count.",
@@ -40,13 +41,14 @@ const DECREASE_HINT: Record<DecreaseType, string> = {
 const fmt = (n: number) => Math.round(n).toLocaleString()
 
 export function InventoryDetailModal({ record, onClose }: { record: InventoryRecord; onClose: () => void }) {
-  const { ledger, canWriteInventory, reactivateInventory, setMode } = usePiles()
+  const { ledger, canWriteInventory, reactivateInventory, setMode, expiryOf } = usePiles()
   const { traceContext, openTrace } = useIssues()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const material = materialEntry(record.materialId)
-  const expired = Boolean(material?.expiryApplicable && record.expiryDate && new Date(record.expiryDate).getTime() < Date.now())
+  // Expiry — only where it applies: the dated batches this balance holds, from the PO / GRN.
+  const expiry = material?.expiryApplicable ? expiryOf(record.inventoryId) : undefined
   const grade = gradeEntry(record.gradeId)
   const location = locationEntry(record.locationId)
   const limits = recordLimits(record)
@@ -65,8 +67,6 @@ export function InventoryDetailModal({ record, onClose }: { record: InventoryRec
   }
   if (dialog === "edit") return <EditDetailsModal record={record} onClose={() => setDialog(null)} />
   if (dialog === "archive") return <ArchiveModal record={record} onClose={() => setDialog(null)} onArchived={onClose} />
-  if (dialog === "expiry") return <SetExpiryModal record={record} onClose={() => setDialog(null)} />
-  if (dialog === "writeoff") return <ExpiryWriteOffModal record={record} onClose={() => setDialog(null)} />
 
   return (
     <Modal title={record.inventoryId} subtitle={`${material?.name ?? record.materialId}${grade ? ` · ${grade.name}` : ""} · ${location?.name ?? record.locationId}`} onClose={onClose} width={760}>
@@ -103,11 +103,6 @@ export function InventoryDetailModal({ record, onClose }: { record: InventoryRec
               </ActionButton>
               <ActionButton onClick={() => setDialog("remove")}>− Remove Stock</ActionButton>
               <ActionButton onClick={() => setDialog("edit")}>Edit Details</ActionButton>
-              {/* Expiry — only where the material says it applies. */}
-              {material?.expiryApplicable && (
-                <ActionButton onClick={() => setDialog("expiry")}>{record.expiryDate ? "Change Expiry Date" : "Set Expiry Date"}</ActionButton>
-              )}
-              {expired && record.quantity > 0 && <ActionButton onClick={() => setDialog("writeoff")}>Write Off Expired</ActionButton>}
               <ActionButton onClick={() => setDialog("archive")}>Archive</ActionButton>
             </>
           ) : (
@@ -138,16 +133,10 @@ export function InventoryDetailModal({ record, onClose }: { record: InventoryRec
             label="Lot / Batch"
             value={record.lotId ?? record.batch ?? (material?.lotTracking ? "Not recorded" : "Not lot-tracked")}
           />
-          {material?.expiryApplicable && (
+          {expiry && (
             <Item
-              label="Expiry Date"
-              value={
-                record.expiryDate
-                  ? `${stampFull(record.expiryDate).split(",")[0]} · ${
-                      expired ? "EXPIRED" : `${Math.floor((new Date(record.expiryDate).getTime() - Date.now()) / 86_400_000)} days left`
-                    }`
-                  : "Not recorded — set it"
-              }
+              label="Next Expiry"
+              value={expiry.nextExpiry ? `${expiryDay(expiry.nextExpiry)} · ${daysToExpiry(expiry.nextExpiry, new Date())} days` : "No dated stock held"}
             />
           )}
           <Item label="Created" value={`${stampFull(record.createdAt)} · ${record.createdBy}`} />
@@ -156,6 +145,51 @@ export function InventoryDetailModal({ record, onClose }: { record: InventoryRec
           {record.notes && <Item label="Notes" value={record.notes} span />}
         </Grid>
       </Section>
+
+      {expiry && (
+        <Section title="Expiry — batches in stock">
+          {expiry.open.length === 0 ? (
+            <p className="text-[12px] text-ink-3">No stock is held.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg ring-1 ring-line">
+              <table className="w-full min-w-[640px] border-collapse text-[12px]">
+                <thead className="bg-panel-2 text-left text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+                  <tr>
+                    <th className="px-3 py-2">Expiry Date</th>
+                    <th className="px-3 py-2 text-right">Days</th>
+                    <th className="px-3 py-2 text-right">Quantity</th>
+                    <th className="px-3 py-2">PO / GRN</th>
+                    <th className="px-3 py-2">Lot</th>
+                    <th className="px-3 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expiry.open.map((b) => (
+                    <tr key={b.batchId} className="border-t border-line">
+                      <td className="px-3 py-2 text-ink">{b.expiryDate ? expiryDay(b.expiryDate) : "Not on PO"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-ink-2">{b.expiryDate ? daysToExpiry(b.expiryDate, new Date()) : "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-ink">
+                        {fmt(b.remaining)} {b.uom}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-ink-2">
+                        {b.poNumber ? `${b.poNumber}${b.grnNo ? ` · ${b.grnNo}` : ""}` : b.source === "OPENING" ? "Opening balance" : "Adjustment"}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-ink-2">{b.lotId ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <ExpiryPill status={batchStatus(b, new Date())} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-ink-3">
+            Dates come from the PO at receipt. Stock is drawn first-expiry-first-out, and a batch that reaches its date leaves by an EXPIRY
+            transaction.
+          </p>
+        </Section>
+      )}
 
       <Section
         title="Traceability"

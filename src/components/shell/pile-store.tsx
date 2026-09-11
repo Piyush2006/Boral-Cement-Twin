@@ -36,6 +36,7 @@ import {
 import { stockStatus, type InventoryRecord } from "@/lib/inventory/model"
 import { recordLimits } from "@/lib/inventory/status"
 import { materialEntry } from "@/lib/inventory/catalog"
+import { dueExpiries, recordExpiry, replayBatches } from "@/lib/inventory/expiry"
 import { installLots } from "@/lib/inventory/lots"
 import type { PileRecord } from "@/lib/inventory/pile-inventory"
 import { inventoryProvider } from "@/lib/inventory/provider"
@@ -92,6 +93,8 @@ export type MovementInput = {
   /** Overrides for traceability, where the caller knows more than the record. */
   gradeId?: string
   lotId?: string
+  /** Inward batch of an expiry-tracked material: its expiry date. */
+  expiryDate?: string
   links?: TransactionLinks
   actor?: string
   at?: string
@@ -263,6 +266,7 @@ function useStore() {
         reference: input.reference,
         notes: input.notes,
         batch: input.batch ?? record.batch,
+        expiryDate: input.quantity > 0 ? input.expiryDate : undefined,
         links: input.links ?? {},
         actor: input.actor ?? ACTOR,
         at: input.at,
@@ -279,6 +283,59 @@ function useStore() {
     },
     [canWriteInventory, recordOf, patchRecord],
   )
+
+  /* ── expiry: batches replayed from the ledger; due batches leave by EXPIRY ── */
+  // A minute clock, so a batch that reaches its date is picked up while the app is open.
+  const [expiryNow, setExpiryNow] = useState(() => new Date())
+  useEffect(() => {
+    const t = setInterval(() => setExpiryNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  const batchIndex = useMemo(
+    () => replayBatches(ledger, (materialId) => Boolean(materialEntry(materialId)?.expiryApplicable)),
+    [ledger],
+  )
+  const expiryOf = useCallback(
+    (inventoryId: string, now: Date = expiryNow) => recordExpiry(batchIndex.byRecord.get(inventoryId), now),
+    [batchIndex, expiryNow],
+  )
+
+  /**
+   * Once a batch reaches its expiry date its remaining quantity is Expired and
+   * leaves available inventory through the normal transaction flow: an EXPIRY
+   * transaction per batch, traced to its PO / GRN / lot. Nothing is overwritten.
+   */
+  const postDueExpiries = useCallback(
+    (now: Date = new Date()): InventoryTransaction[] => {
+      if (!canWriteInventory) return []
+      const posted: InventoryTransaction[] = []
+      const index = replayBatches(transactions(), (m) => Boolean(materialEntry(m)?.expiryApplicable))
+      for (const b of dueExpiries(index, now)) {
+        const record = recordOf(b.inventoryId)
+        if (!record?.active) continue
+        const qty = Math.min(b.remaining, record.quantity)
+        if (qty <= 0) continue
+        const day = new Date(b.expiryDate!).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
+        const res = postMovement({
+          inventoryId: b.inventoryId,
+          type: "EXPIRY",
+          quantity: -qty,
+          reason: `Reached expiry date ${day}`,
+          lotId: b.lotId,
+          links: { batchId: b.batchId, poNumber: b.poNumber, grnNo: b.grnNo, incomingId: b.incomingId, lotId: b.lotId },
+          actor: "system.expiry",
+        })
+        if (res.ok) posted.push(res.value)
+      }
+      return posted
+    },
+    [canWriteInventory, recordOf, postMovement],
+  )
+  // Run on load, whenever the ledger changes, and on the minute clock.
+  useEffect(() => {
+    if (!canWriteInventory) return
+    if (dueExpiries(batchIndex, expiryNow).length) postDueExpiries(expiryNow)
+  }, [batchIndex, expiryNow, canWriteInventory, postDueExpiries])
 
   const nextAdjustmentId = useCallback(() => {
     const used = transactions()
@@ -305,7 +362,6 @@ function useStore() {
         targetStock: input.targetStock!,
         maxStock: input.maxStock!,
         lotId: input.lotId?.trim().toUpperCase() || undefined,
-        expiryDate: input.expiryDate || undefined,
         batch: input.batch?.trim() || undefined,
         description: input.description?.trim() || undefined,
         active: true,
@@ -327,6 +383,7 @@ function useStore() {
           quantity: input.quantity!,
           reason: "Approved opening balance",
           reference: input.openingReference?.trim(),
+          expiryDate: input.openingExpiry || undefined,
           links: { adjustmentId: nextAdjustmentId() },
         })
         if (!posted.ok) {
@@ -370,83 +427,6 @@ function useStore() {
       })
     },
     [canWriteInventory, recordOf, postMovement, nextAdjustmentId],
-  )
-
-  /**
-   * Write off stock that has passed its expiry date.
-   *
-   * Expiry is its own term in the real-time balance — previous + inward −
-   * expired − net consumed — so it posts as its own EXPIRY transaction rather
-   * than hiding inside a manual adjustment or being counted as consumption.
-   */
-  const writeOffExpired = useCallback(
-    (inventoryId: string, quantity: number | null, reason: string): Result<InventoryTransaction> => {
-      if (!canWriteInventory) return { ok: false, error: "You do not have permission to write off stock." }
-      const record = recordOf(inventoryId)
-      if (!record) return { ok: false, error: "Inventory record not found." }
-      if (!record.active) return { ok: false, error: `${record.inventoryId} is archived and cannot take movements.` }
-      if (!record.expiryDate) {
-        return { ok: false, error: `${record.inventoryId} carries no expiry date, so there is nothing to write off as expired.` }
-      }
-      if (new Date(record.expiryDate).getTime() > Date.now()) {
-        return {
-          ok: false,
-          error: `${record.inventoryId} does not expire until ${new Date(record.expiryDate).toLocaleDateString("en-AU")}. Stock is written off only once it has expired.`,
-        }
-      }
-      if (quantity === null || quantity <= 0) return { ok: false, error: "Quantity must be a number greater than zero." }
-      if (!reason.trim()) return { ok: false, error: "Enter a reason." }
-      return postMovement({
-        inventoryId,
-        type: "EXPIRY",
-        quantity: -quantity,
-        reason: reason.trim(),
-        links: { lotId: record.lotId },
-      })
-    },
-    [canWriteInventory, recordOf, postMovement],
-  )
-
-  /**
-   * Set or correct a record's expiry date. Only for materials where expiry
-   * applies; the quantity never changes here, and the old date, the new date
-   * and the reason go into the record's audit trail.
-   */
-  const setExpiryDate = useCallback(
-    (inventoryId: string, expiryDate: string | null, reason: string, lotId?: string): Result<true> => {
-      if (!canWriteInventory) return { ok: false, error: "You do not have permission to change expiry dates." }
-      const record = recordOf(inventoryId)
-      if (!record) return { ok: false, error: "Inventory record not found." }
-      if (!record.active) return { ok: false, error: `${record.inventoryId} is archived.` }
-      const material = materialEntry(record.materialId)
-      if (!material?.expiryApplicable) return { ok: false, error: `Expiry does not apply to ${material?.name ?? "this material"}.` }
-      if (!expiryDate || !Number.isFinite(new Date(expiryDate).getTime())) return { ok: false, error: "Enter a valid expiry date." }
-      if (!reason.trim()) return { ok: false, error: "Enter a reason for the expiry date." }
-      const next = new Date(expiryDate).toISOString()
-      const relot = Boolean(lotId && lotId !== record.lotId)
-      if (record.expiryDate && new Date(record.expiryDate).toISOString() === next && !relot) return { ok: false, error: "That is already the expiry date." }
-      const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
-      const at = new Date().toISOString()
-      patchRecord(inventoryId, (r) => ({
-        ...r,
-        expiryDate: next,
-        // A dated balance holds one batch: when a new batch arrives, it names that batch.
-        lotId: relot ? lotId : r.lotId,
-        updatedAt: at,
-        audit: [
-          ...r.audit,
-          {
-            at,
-            by: ACTOR,
-            action: `${r.expiryDate ? `Expiry date changed ${day(r.expiryDate)} → ${day(next)}` : `Expiry date set to ${day(next)}`}${
-              relot ? `, lot ${r.lotId ?? "none"} → ${lotId}` : ""
-            } — ${reason.trim()}`,
-          },
-        ],
-      }))
-      return { ok: true, value: true }
-    },
-    [canWriteInventory, recordOf, patchRecord],
   )
 
   /**
@@ -567,8 +547,10 @@ function useStore() {
     postMovement,
     createInventory,
     adjustInventory,
-    writeOffExpired,
-    setExpiryDate,
+    batchIndex,
+    expiryOf,
+    expiryNow,
+    postDueExpiries,
     updateInventoryDetails,
     archiveInventory,
     reactivateInventory,

@@ -20,6 +20,8 @@ import type { IssueRecord } from "@/lib/issues/types"
 import { consumptionTransactionType } from "@/lib/issues/consumption"
 import { readingPasses, type QualityReading } from "@/lib/masters/types"
 import { gradeEntry, materialEntry } from "./catalog"
+import { findPurchaseOrder } from "@/lib/incoming/catalog"
+import { dueExpiries, expiryFromPo, replayBatches } from "./expiry"
 import { formatTxnId, type InventoryTransaction, type TransactionLinks, type TransactionType } from "./ledger"
 import { formatLotId, type InternalLot } from "./lots"
 import type { InventoryRecord } from "./model"
@@ -76,9 +78,19 @@ type Event = {
   reference?: string
   batch?: string
   lotId?: string
+  /** Expiry-tracked inward: the batch's expiry date, from the PO. */
+  expiryDate?: string
   actor: string
   onPosted?: (txnId: string) => void
 }
+
+/**
+ * The seeded history ends here. A seeded batch whose expiry date falls before
+ * it leaves by an EXPIRY transaction inside the history; anything later is
+ * expired by the running application when its date is reached. Fixed, not
+ * "now", so the server and browser renders agree.
+ */
+const SEED_HISTORY_END = "2026-09-09T12:00:00.000Z"
 
 let cached: SeedBundle | null = null
 
@@ -100,6 +112,9 @@ export function seedBundle(): SeedBundle {
     if (!receipt) continue
     const seed = INVENTORY_SEED.find((s) => s.inventoryId === receipt.inventoryId)
     const docs = { poNumber: r.poNumber, gateEntryNo: r.gateEntryNo, grnNo: r.grnNo, incomingId: r.incomingId, qualityRef: r.quality ? `${r.incomingId} · ${r.quality.result}` : undefined }
+    // Expiry comes from the PO and travels with the receipt — never re-entered.
+    const expiryDate = materialEntry(r.materialId)?.expiryApplicable ? expiryFromPo(findPurchaseOrder(r.poNumber), new Date(receipt.at)) : undefined
+    receipt.expiryDate = expiryDate
     if (!materialEntry(r.materialId)?.lotTracking) {
       events.push({
         at: receipt.at,
@@ -109,6 +124,7 @@ export function seedBundle(): SeedBundle {
         type: "INCOMING",
         links: docs,
         batch: r.batch,
+        expiryDate,
         actor: receipt.by,
         onPosted: (id) => {
           receipt.transactionId = id
@@ -133,6 +149,7 @@ export function seedBundle(): SeedBundle {
       supplierBatch: r.batch,
       quality: gradeReadings(seed?.gradeId, r.incomingId),
       qualityResult: r.quality?.result ?? "PASS",
+      expiryDate,
       receivedAt: receipt.at,
       receivedBy: receipt.by,
       provenance: "DEMO",
@@ -148,6 +165,7 @@ export function seedBundle(): SeedBundle {
       links: { ...docs, lotId: lot.lotId },
       batch: r.batch,
       lotId: lot.lotId,
+      expiryDate,
       actor: receipt.by,
       onPosted: (id) => {
         receipt.transactionId = id
@@ -279,6 +297,7 @@ export function seedBundle(): SeedBundle {
       reason: e.reason,
       reference: e.reference,
       batch: e.batch,
+      expiryDate: e.expiryDate,
       links: e.links,
       actor: e.actor,
       at: e.at,
@@ -299,10 +318,39 @@ export function seedBundle(): SeedBundle {
       links: { adjustmentId: `ADJ-${String(adjNo).padStart(5, "0")}` },
       reason: "Opening balance",
       reference: "Approved opening balance — demo load",
+      lotId: s.lotId,
+      expiryDate: s.openingExpiry,
       actor: "inventory.admin",
     })
   }
-  for (const e of events) post(e.inventoryId, e)
+  // Seeded batches that reach their expiry date inside the history leave by an
+  // EXPIRY transaction when the date arrives — the same flow the running
+  // application uses — so the ledger stays in time order.
+  const tracked = (materialId: string) => Boolean(materialEntry(materialId)?.expiryApplicable)
+  let flushedTo = ""
+  const expireDue = (until: string) => {
+    const dated = ledger.some((t) => t.expiryDate && t.expiryDate > flushedTo && t.expiryDate <= until)
+    flushedTo = until
+    if (!dated) return
+    for (const b of dueExpiries(replayBatches(ledger, tracked), new Date(until))) {
+      const day = new Date(b.expiryDate!).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })
+      const last = ledger[ledger.length - 1]?.at ?? b.expiryDate!
+      post(b.inventoryId, {
+        at: b.expiryDate! > last ? b.expiryDate! : last,
+        delta: -b.remaining,
+        type: "EXPIRY",
+        links: { batchId: b.batchId, poNumber: b.poNumber, grnNo: b.grnNo, incomingId: b.incomingId, lotId: b.lotId },
+        lotId: b.lotId,
+        reason: `Reached expiry date ${day}`,
+        actor: "system.expiry",
+      })
+    }
+  }
+  for (const e of events) {
+    expireDue(e.at)
+    post(e.inventoryId, e)
+  }
+  expireDue(SEED_HISTORY_END)
 
   for (const s of INVENTORY_SEED) {
     inventory.push({
@@ -316,7 +364,6 @@ export function seedBundle(): SeedBundle {
       targetStock: s.targetStock,
       maxStock: s.maxStock,
       lotId: s.lotId,
-      expiryDate: s.expiryDate,
       description: s.description,
       active: true,
       createdAt: OPENING_AT,

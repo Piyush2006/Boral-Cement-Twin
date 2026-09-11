@@ -22,6 +22,7 @@ import {
   resolvePurchaseOrder,
 } from "@/lib/incoming/catalog"
 import { isCounted, type IncomingRecord, type QualityResult } from "@/lib/incoming/types"
+import { expiryFromPo } from "@/lib/inventory/expiry"
 import { gradeEntry, locationEntry, materialEntry } from "@/lib/inventory/catalog"
 import { seedGradeAt } from "@/lib/inventory/seed-records"
 import { readingPasses, samplingLabel } from "@/lib/masters/types"
@@ -49,10 +50,16 @@ export function useReceivingOptions(materialId: string | undefined, gradeId?: st
 }
 
 export function inventoryOptionLabel(r: InventoryRecord): string {
-  const expiry = r.expiryDate
-    ? ` · ${new Date(r.expiryDate).getTime() < Date.now() ? "EXPIRED" : "expires"} ${new Date(r.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}`
-    : ""
-  return `${locationEntry(r.locationId)?.name ?? r.locationId} · ${r.inventoryId}${r.batch ? ` · Batch ${r.batch}` : ""}${expiry}`
+  return `${locationEntry(r.locationId)?.name ?? r.locationId} · ${r.inventoryId}${r.batch ? ` · Batch ${r.batch}` : ""}`
+}
+
+const expiryDay = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
+
+/** What the PO says about expiry, in words — for materials where expiry applies. */
+export function poExpiryLabel(po: { expiryDate?: string; shelfLifeDays?: number }): string {
+  if (po.expiryDate) return expiryDay(po.expiryDate)
+  if (po.shelfLifeDays) return `${po.shelfLifeDays}-day shelf life from receipt`
+  return "Not stated on the PO"
 }
 
 /* ── 1. Identification: Scan QR or enter PO ──────────────────────────────── */
@@ -272,6 +279,7 @@ export function IdentifyModal({
               <Detail label="Expected Quantity" value={po.expectedMt.toLocaleString()} />
               <Detail label="UOM" value={material?.uom ?? "MT"} />
               <Detail label="Expected Arrival" value={stamp(po.expectedArrival)} />
+              {material?.expiryApplicable && <Detail label="Expiry (from PO)" value={poExpiryLabel(po)} />}
               <Detail label="Sampling" value={samplingLabel(gradeEntry(po.gradeId)?.sampleEvery ?? 0)} />
             </div>
             {po.adHoc && (
@@ -602,8 +610,13 @@ export function ReceiptModal({ record, onClose }: { record: IncomingRecord; onCl
   const counted = isCounted(uom)
   const weighedNet = record.weighing?.netMt ?? null
   const [qty, setQty] = useState(weighedNet ? String(weighedNet) : "")
-  // Expiry — only for materials where it applies; the date on the batch received.
+  // Expiry — only for materials where it applies. It comes from the PO; the
+  // docket date is asked for only when the PO states neither a date nor a shelf life.
+  const poExpiry = material?.expiryApplicable
+    ? expiryFromPo({ expiryDate: record.poExpiryDate, shelfLifeDays: record.poShelfLifeDays }, new Date())
+    : undefined
   const [expiry, setExpiry] = useState("")
+  const shownExpiry = poExpiry ?? (expiry ? new Date(`${expiry}T00:00:00`).toISOString() : undefined)
   const [receiving, setReceiving] = useState(record.receivingInventoryId)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
@@ -618,7 +631,7 @@ export function ReceiptModal({ record, onClose }: { record: IncomingRecord; onCl
       receivedMt: qtyN,
       receivingInventoryId: receiving,
       lotId: material?.lotTracking ? lotId : undefined,
-      expiryDate: material?.expiryApplicable && expiry ? new Date(`${expiry}T00:00:00`).toISOString() : undefined,
+      expiryDate: material?.expiryApplicable && !poExpiry && expiry ? new Date(`${expiry}T00:00:00`).toISOString() : undefined,
     })
     // A refused posting leaves the record where it was, with no inventory move.
     if (!outcome.ok) return setError(outcome.error)
@@ -645,9 +658,9 @@ export function ReceiptModal({ record, onClose }: { record: IncomingRecord; onCl
                   under lot <span className="font-mono text-ink">{lotId}</span>
                 </>
               ) : null}
-              {material?.expiryApplicable && expiry ? (
+              {material?.expiryApplicable && shownExpiry ? (
                 <>
-                  , expiring <span className="font-mono text-ink">{new Date(`${expiry}T00:00:00`).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                  , expiring <span className="font-mono text-ink">{expiryDay(shownExpiry)}</span>
                 </>
               ) : null}
               .
@@ -701,11 +714,26 @@ export function ReceiptModal({ record, onClose }: { record: IncomingRecord; onCl
               ))}
             </select>
           </Field>
-          {material?.expiryApplicable && (
-            <Field label="Expiry Date" required hint={`Expiry applies to ${material.name}. Enter the date on the batch received.`}>
-              <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} disabled={!canWriteInventory} className={INPUT} />
-            </Field>
-          )}
+          {material?.expiryApplicable &&
+            (poExpiry ? (
+              <Field
+                label="Expiry Date (from PO)"
+                hint={
+                  record.poExpiryDate
+                    ? `Stated on ${record.poNumber}. It is carried into inventory with this batch.`
+                    : `${record.poShelfLifeDays}-day shelf life on ${record.poNumber}, counted from today. It is carried into inventory with this batch.`
+                }
+              >
+                <Readonly value={expiryDay(poExpiry)} />
+              </Field>
+            ) : (
+              <Field
+                label="Expiry Date on Delivery Docket"
+                hint={`${record.poNumber} states no expiry or shelf life. Record the docket's date if it has one; otherwise the batch shows as No Expiry Date in monitoring.`}
+              >
+                <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} disabled={!canWriteInventory} className={INPUT} />
+              </Field>
+            ))}
           {material?.lotTracking && (
             <Field label="Internal Lot / Batch Reference" hint={`${material.name} is lot-tracked. Keep the proposed reference or enter the one on the documents.`}>
               <input value={lotId} onChange={(e) => setLotId(e.target.value.toUpperCase())} className={`${INPUT} font-mono`} />
@@ -732,7 +760,7 @@ export function ReceiptModal({ record, onClose }: { record: IncomingRecord; onCl
             onCancel={onClose}
             onSubmit={submit}
             submitLabel="Confirm Receipt"
-            disabled={!canWriteInventory || qtyN === null || (Boolean(material?.expiryApplicable) && !expiry)}
+            disabled={!canWriteInventory || qtyN === null}
           />
         </>
       )}

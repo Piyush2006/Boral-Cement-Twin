@@ -99,6 +99,9 @@ export type IncomingRecord = {
   supplier: string
   expectedMt: number
   expectedArrival: string
+  /** Expiry information from the PO, carried with the delivery — never re-entered. */
+  poExpiryDate?: string
+  poShelfLifeDays?: number
   /** PO's default receiving location. */
   destinationLocationId: string
   /** Inventory record the receipt will post into. */

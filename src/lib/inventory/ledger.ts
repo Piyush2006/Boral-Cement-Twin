@@ -65,6 +65,8 @@ export type TransactionLinks = {
   /** Maintenance draws: the asset and the maintenance reference. */
   assetId?: string
   maintenanceRef?: string
+  /** EXPIRY: the received batch (its inward transaction) that reached its expiry date. */
+  batchId?: string
 }
 
 export type InventoryTransaction = {
@@ -86,6 +88,12 @@ export type InventoryTransaction = {
   reference?: string
   notes?: string
   batch?: string
+  /**
+   * Inward movements of an expiry-tracked material: the batch's expiry date,
+   * as stated on (or derived from the shelf life on) the PO. Each such inward
+   * transaction is one batch — see lib/inventory/expiry.ts.
+   */
+  expiryDate?: string
   links: TransactionLinks
   actor: string
   at: string

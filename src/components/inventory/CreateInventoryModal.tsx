@@ -87,7 +87,8 @@ export function CreateInventoryModal({
       targetStock: target,
       maxStock: max,
       lotId: material.lotTracking ? lotId : undefined,
-      expiryDate: expiryDate ? new Date(expiryDate).toISOString() : undefined,
+      // Only an opening balance carries a batch — and so an expiry — on creation.
+      openingExpiry: material.expiryApplicable && qty !== null && qty > 0 && expiryDate ? new Date(expiryDate).toISOString() : undefined,
     })
     if (!result.ok) return setError(result.error)
     onCreated?.(result.value.record, result.value.transaction)
@@ -151,10 +152,12 @@ export function CreateInventoryModal({
       </div>
 
       {/* Only where the material calls for it — never forced. */}
-      {(material?.expiryApplicable || material?.lotTracking) && (
+      {((material?.expiryApplicable && qty !== null && qty > 0) || material?.lotTracking) && (
         <div className="grid grid-cols-2 gap-x-3">
-          {material?.expiryApplicable && (
-            <Field label="Expiry Date" hint="Expiry applies to this material.">
+          {/* A new record starts at 0 and receives dated stock through Incoming, where the
+              expiry comes from the PO. Only an opening balance brings its own batch date. */}
+          {material?.expiryApplicable && qty !== null && qty > 0 && (
+            <Field label="Opening Batch Expiry" hint="Expiry applies to this material. The date of the opening stock being loaded.">
               <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} disabled={!canWriteInventory} className={INPUT} />
             </Field>
           )}

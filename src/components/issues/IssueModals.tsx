@@ -24,10 +24,12 @@ import {
 } from "@/lib/issues/consumption"
 import { gradeEntry } from "@/lib/inventory/catalog"
 import { transactionLabel } from "@/lib/inventory/ledger"
-import { expiredOn, parseQuantity, type Availability } from "@/lib/issues/rules"
+import { parseQuantity, type Availability } from "@/lib/issues/rules"
 import { receiptsInto } from "@/lib/issues/trace"
 import { returnableQty, returnedQty, type IssueRecord } from "@/lib/issues/types"
 import { useIssues } from "./issue-store"
+import { usePiles } from "@/components/shell/pile-store"
+import { expiryDay } from "@/components/inventory/Expiry"
 
 const fmt = (n: number) => Math.round(n).toLocaleString()
 
@@ -140,6 +142,7 @@ const COSTABLE_ASSETS = PLANT_ASSETS.filter(
 
 export function CreateIssueModal({ onClose, onCreated }: { onClose: () => void; onCreated: (record: IssueRecord) => void }) {
   const { createIssue, stockAt, incoming, inventory } = useIssues()
+  const { expiryOf } = usePiles()
   const [pair, setPair] = useState("")
   const [materialId, gradeId] = pair ? pair.split("|") : ["", ""]
   const [maintenanceRef, setMaintenanceRef] = useState("")
@@ -154,15 +157,22 @@ export function CreateIssueModal({ onClose, onCreated }: { onClose: () => void; 
   const [error, setError] = useState<string | null>(null)
 
   const material = materialEntry(materialId)
-  // First expiry, first out: dated balances soonest-first, undated after.
+  // Expiry-tracked stock: the balance whose next batch expires soonest is listed
+  // first. Within a balance, consumption draws first-expiry-first-out on its own,
+  // and expired quantity has already left through an EXPIRY transaction.
+  const nextExpiry = (id: string) => (material?.expiryApplicable ? expiryOf(id).nextExpiry : undefined)
   const sources = useMemo(
     () =>
       inventory
         .filter((r) => r.active && r.materialId === materialId && r.gradeId === gradeId)
-        .sort((a, b) => (a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity) - (b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity)),
-    [inventory, materialId, gradeId],
+        .sort((a, b) => {
+          const ea = nextExpiry(a.inventoryId)
+          const eb = nextExpiry(b.inventoryId)
+          return (ea ? new Date(ea).getTime() : Infinity) - (eb ? new Date(eb).getTime() : Infinity)
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inventory, materialId, gradeId, expiryOf],
   )
-  const usable = sources.filter((s) => !expiredOn(s))
   const source = sources.find((s) => s.inventoryId === sourceId)
   const stock = source ? stockAt(source.inventoryId) : null
   const quantity = parseQuantity(qty)
@@ -220,7 +230,7 @@ export function CreateIssueModal({ onClose, onCreated }: { onClose: () => void; 
             onChange={(e) => {
               setPair(e.target.value)
               const [m, g] = e.target.value.split("|")
-              const only = inventory.filter((r) => r.active && r.materialId === m && r.gradeId === g && !expiredOn(r))
+              const only = inventory.filter((r) => r.active && r.materialId === m && r.gradeId === g)
               setSourceId(only.length === 1 ? only[0].inventoryId : "")
               setOriginIncomingId("")
             }}
@@ -238,11 +248,9 @@ export function CreateIssueModal({ onClose, onCreated }: { onClose: () => void; 
           label="Source Inventory"
           required
           hint={
-            materialId && sources.length > 0 && usable.length === 0
-              ? "All stock of this Material + Grade has expired — write it off under Inventory › Expiry."
-              : sources.some((x) => x.expiryDate)
-                ? "Earliest expiry is listed first — use it first."
-                : undefined
+            material?.expiryApplicable
+              ? "Soonest expiry is listed first. The issue draws the earliest-expiring batch first; expired stock has already been removed."
+              : undefined
           }
         >
           <select
@@ -256,10 +264,11 @@ export function CreateIssueModal({ onClose, onCreated }: { onClose: () => void; 
           >
             <option value="">Select location…</option>
             {sources.map((s) => (
-              // Expired stock is shown so the operator knows it is there, but it cannot be issued.
-              <option key={s.inventoryId} value={s.inventoryId} disabled={Boolean(expiredOn(s))}>
+              <option key={s.inventoryId} value={s.inventoryId}>
                 {inventoryOptionLabel(s)}
-                {expiredOn(s) ? " — write off, not issued" : ""}
+                {nextExpiry(s.inventoryId)
+                  ? ` · next expiry ${expiryDay(nextExpiry(s.inventoryId)!)}`
+                  : ""}
               </option>
             ))}
           </select>

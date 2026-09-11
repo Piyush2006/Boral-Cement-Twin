@@ -1358,10 +1358,8 @@ above, **these are current**. The earlier text is kept for its reasoning.
     request, 2026-09-11; the revised spec forbids top-level menus for them).
     Issue & Consumption › Returns: net consumption by material, issues open
     for return, the return register with each RETURN transaction, and
-    Record Return (pick the issue). Inventory › Expiry: Expired / Expiring
-    Soon / Healthy Shelf Life / No Expiry Date for expiry-tracked materials
-    only, Set / Change Expiry Date (reason required, audited, moves no stock)
-    and Write Off (EXPIRY −, only once expired), plus the write-off history.
+    Record Return (pick the issue). Inventory › Expiry Monitoring — see
+    decision 14.
     Manual PO entry offers the open POs in a dropdown (in-progress POs shown
     disabled) with typing kept for POs not in the list; the demo PO catalogue
     is 60, of which the first 34 carry seeded deliveries.
@@ -1375,20 +1373,35 @@ above, **these are current**. The earlier text is kept for its reasoning.
     Location, Add Material + Grade / Grade, Identify Delivery, Create Issue,
     Record Consumption and Record Return. No success screen, and no jump into
     a detail view.
-14. **Expiry is captured wherever dated stock enters or moves** (user
-    request, 2026-09-11). Switched on per material ("Expiry applies", Master
-    › Materials + Grades — the settings section is open by default, and it
-    cannot be switched off while dated stock is held). Dates are entered on
-    Create Inventory, at Incoming receipt (required for expiry materials,
-    refused for others, an already-expired batch is not received, and a
-    balance holding stock of another date is refused so shelf lives are
-    never blended; the balance, lot and receipt carry the date), and set or
-    changed with a reason from Inventory › Expiry or the record's detail
-    view. Expired stock cannot be issued (sources list soonest expiry first,
-    expired ones disabled) and is written off as EXPIRY. Traceability, the
-    inventory list and Reports show the date. Spares are counted, not
-    weighed: Incoming uses the material's UOM, and two configured spare POs
-    (PO-10305 lubricant, PO-10306 bearings) exercise it.
+14. **Expiry comes from the PO and is monitored per batch** (user's Expiry
+    Management prompt, 2026-09-11; supersedes the manual entry and write-off
+    of the earlier version). An Inventory Management capability, not a module,
+    and only for materials with "Expiry applies" (Master › Materials + Grades;
+    it cannot be switched off while dated batches are held — today SRF and
+    Gear Lubricant). The flow is PO → Incoming → GRN → INCOMING transaction →
+    dated batch → Expiry Monitoring. A PO states an expiry date or a shelf life
+    (counted from receipt); Identify and Confirm Receipt show it read-only and
+    the receipt carries it onto the INCOMING transaction — nobody re-enters
+    it. Only where the PO states neither may the docket's date be recorded
+    (optional; otherwise the batch is No Expiry Date). An opening balance may
+    carry its batch's date. There is **no** Set / Change Expiry Date and no
+    manual write-off. Batches are replayed from the ledger
+    (`src/lib/inventory/expiry.ts`), never stored: each inward transaction is
+    a batch, outward movements draw first-expiry-first-out, a RETURN goes back
+    to the batches its issue drew from, so one pile can hold deliveries with
+    different dates, each traced to its PO / GRN / lot. When a batch reaches
+    its date the expiry run (`postDueExpiries`, actor `system.expiry`, on load
+    and every minute) posts EXPIRY (−) for its remaining quantity, linked to
+    the batch, PO and GRN; the seed does the same inside its history. Status is
+    Expired / Approaching Expiry (≤ 30 days) / Within Shelf Life / No Expiry
+    Date. Inventory › Expiry Monitoring lists batches in stock, the expired
+    register and, per balance, Previous + Inward − Expired − Net Consumed
+    (± other) = Current Available, checked against the record. The inventory
+    list, record detail, issue sources (soonest expiry first), Traceability
+    and Reports show the batches. PO-10250 is pinned to the prompt's worked
+    example (SRF, 75 MT, expiry 25 Oct 2026). Spares are counted, not weighed:
+    Incoming uses the material's UOM, and two configured spare POs (PO-10305
+    lubricant with a 540-day shelf life, PO-10306 bearings) exercise it.
 11. **One source of truth, checked end to end.** Every quantity on every
     screen — Inventory, Transactions, the map and 3D cards, Plant Flow and
     Reports — is derived from the inventory records and the ledger in

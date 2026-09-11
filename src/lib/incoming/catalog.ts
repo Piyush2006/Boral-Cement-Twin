@@ -22,6 +22,10 @@ export type PurchaseOrder = {
   supplier: string
   /** Ordered quantity, in the material's unit of measure (MT for bulk, DRUM / EA for spares). */
   expectedMt: number
+  /** Expiry-tracked materials: the batch expiry date stated on the PO … */
+  expiryDate?: string
+  /** … or the shelf life, counted from receipt. Neither is asked for elsewhere. */
+  shelfLifeDays?: number
   expectedArrival: string
   destinationLocationId: string
 }
@@ -83,6 +87,14 @@ const LOAD_RANGE: Record<string, [number, number]> = {
 
 const FIRST_PO = 10245
 const PO_COUNT = 60
+
+/**
+ * The expiry specification's worked example, pinned so the demo shows it:
+ * PO-10250, Alternate Fuel — SRF, 75 MT, expiry 25 Oct 2026 on the PO.
+ */
+const WORKED_EXAMPLE: Record<string, Partial<PurchaseOrder>> = {
+  "PO-10250": { expectedMt: 75, expiryDate: "2026-10-25T00:00:00.000Z" },
+}
 const BASE_DAY = Date.UTC(2026, 8, 3) // 3 Sept 2026
 
 /** Build a purchase order deterministically from its number. */
@@ -107,6 +119,10 @@ function buildPurchaseOrder(poNumber: string, index: number): PurchaseOrder {
     expectedMt: qty,
     expectedArrival: new Date(BASE_DAY + day * 86400000 + hour * 3600000 + minute * 60000).toISOString(),
     destinationLocationId: inbound.destination,
+    // SRF is expiry-tracked: the supplier states the batch expiry on the PO,
+    // 45 days after the planned delivery. Demo configuration.
+    ...(inbound.materialId === "MAT-ALT-FUEL" ? { expiryDate: new Date(BASE_DAY + (day + 45) * 86400000).toISOString() } : {}),
+    ...WORKED_EXAMPLE[poNumber],
   }
 }
 
@@ -125,6 +141,8 @@ const SPARE_POS: PurchaseOrder[] = [
     expectedMt: 12,
     expectedArrival: "2026-09-15T01:30:00.000Z",
     destinationLocationId: "STORE-01",
+    // Shelf life, not a date: the expiry is counted from the day it is received.
+    shelfLifeDays: 540,
   },
   {
     poNumber: "PO-10306",
@@ -266,6 +284,8 @@ export function seedIncoming(): IncomingRecord[] {
       supplier: po.supplier,
       expectedMt: po.expectedMt,
       expectedArrival: po.expectedArrival,
+      poExpiryDate: po.expiryDate,
+      poShelfLifeDays: po.shelfLifeDays,
       destinationLocationId: po.destinationLocationId,
       receivingInventoryId: seedInventoryIdAt(po.destinationLocationId) ?? "",
       vehicleRef: byRail ? `RAIL-${4100 + i}` : `TRK-${String(210 + i * 7).padStart(4, "0")}`,
@@ -282,7 +302,8 @@ export function seedIncoming(): IncomingRecord[] {
     }
 
     // Weighed loads land within a few per cent of the ordered quantity.
-    const net = Math.round(po.expectedMt * (0.96 + rand() * 0.07))
+    const variance = 0.96 + rand() * 0.07
+    const net = WORKED_EXAMPLE[po.poNumber] ? po.expectedMt : Math.round(po.expectedMt * variance)
     const tare = 20 + Math.round(rand() * 15)
     const weighed: IncomingRecord = {
       ...record,

@@ -65,7 +65,7 @@ export function Dashboard({
   now: Date
   onDrill: (target: DashboardTarget) => void
 }) {
-  const { inventory, ledger, setMode, setInventoryTab } = usePiles()
+  const { inventory, ledger, setMode, setInventoryTab, expiryOf } = usePiles()
   const { records: incoming, setOpenId: openIncoming } = useIncoming()
   const { records: issues } = useIssues()
   const masters = useMasters()
@@ -120,8 +120,9 @@ export function Dashboard({
   const days = useMemo(() => {
     const usable = new Map<string, number>()
     for (const r of active) {
-      if (r.expiryDate && new Date(r.expiryDate).getTime() < now.getTime()) continue
-      usable.set(r.materialId, (usable.get(r.materialId) ?? 0) + r.quantity)
+      // Usable: less any quantity already past its expiry date.
+      const expiredDue = materialEntry(r.materialId)?.expiryApplicable ? expiryOf(r.inventoryId, now).duePendingQty : 0
+      usable.set(r.materialId, (usable.get(r.materialId) ?? 0) + r.quantity - expiredDue)
     }
     const rows = new Map<string, { materialId: string; days: number; horizon: number }>()
     for (const plan of PRODUCTION_PLANS) {
@@ -143,14 +144,19 @@ export function Dashboard({
     [active],
   )
 
+  /** Dated batches in stock approaching (or past) their expiry — from the PO dates, soonest first. */
   const expiring = useMemo(
     () =>
       active
-        .filter((r) => r.expiryDate && materialEntry(r.materialId)?.expiryApplicable && r.quantity > 0)
-        .map((r) => ({ record: r, days: daysToExpiry(r.expiryDate!, now) }))
+        .filter((r) => materialEntry(r.materialId)?.expiryApplicable)
+        .flatMap((r) =>
+          expiryOf(r.inventoryId, now)
+            .open.filter((b) => b.expiryDate)
+            .map((b) => ({ record: r, batch: b, days: daysToExpiry(b.expiryDate!, now) })),
+        )
         .filter((e) => e.days <= EXPIRING_SOON_DAYS)
         .sort((a, b) => a.days - b.days),
-    [active, now],
+    [active, now, expiryOf],
   )
 
   const recent = useMemo(() => ledger.filter((t) => within(t.at, range)).slice(0, 6), [ledger, range])
@@ -233,13 +239,13 @@ export function Dashboard({
             head={["Material (Grade)", "Location", "Qty", "Expires"]}
             align={["l", "l", "r", "l"]}
             empty="Nothing expires in the next 30 days."
-            rows={expiring.map(({ record: r, days: d }) => [
+            rows={expiring.map(({ record: r, batch: b, days: d }) => [
               <MaterialCell key="m" record={r} />,
               <span key="l" className="text-ink-2">{shortLocation(r.locationId)}</span>,
-              <span key="q" className="whitespace-nowrap font-mono text-ink">{fmt(r.quantity)} {r.uom}</span>,
+              <span key="q" className="whitespace-nowrap font-mono text-ink">{fmt(b.remaining)} {b.uom}</span>,
               <span key="e" className={d < 0 ? "font-semibold text-ink" : "text-ink-2"}>
                 <span className="block whitespace-nowrap">
-                  {new Date(r.expiryDate!).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}
+                  {new Date(b.expiryDate!).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}
                 </span>
                 {d < 0 ? (
                   <span className="mt-0.5 inline-block rounded bg-crit/15 px-1 text-[10px] font-bold uppercase text-ink ring-1 ring-crit/40">✕ Expired</span>

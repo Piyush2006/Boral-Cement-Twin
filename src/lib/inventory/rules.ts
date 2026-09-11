@@ -77,7 +77,8 @@ export type NewInventoryInput = {
   maxStock: number | null
   batch?: string
   lotId?: string
-  expiryDate?: string
+  /** Expiry-tracked materials: the expiry of the opening batch, where an opening balance is loaded. */
+  openingExpiry?: string
 }
 
 export function validateNewInventory(input: NewInventoryInput, existing: InventoryRecord[]): Check {
@@ -121,8 +122,11 @@ export function validateNewInventory(input: NewInventoryInput, existing: Invento
     return { ok: false, error: "An opening balance above zero needs its approval reference." }
   }
 
-  if (input.expiryDate && !material.expiryApplicable) {
+  if (input.openingExpiry && !material.expiryApplicable) {
     return { ok: false, error: `Expiry does not apply to ${material.name}.` }
+  }
+  if (input.openingExpiry && !(input.quantity && input.quantity > 0)) {
+    return { ok: false, error: "An expiry date belongs to the opening batch — there is none at zero quantity." }
   }
   if (input.lotId?.trim() && !material.lotTracking) {
     return { ok: false, error: `${material.name} is not lot-tracked, so it takes no lot reference.` }

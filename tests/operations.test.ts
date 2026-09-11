@@ -291,10 +291,15 @@ describe("production readiness", () => {
 /* ── expiry ──────────────────────────────────────────────────────────────── */
 
 describe("expiry", () => {
-  it("holds dated stock only for materials where expiry applies", () => {
-    const dated = bundle.inventory.filter((r) => r.expiryDate)
-    expect(dated.length).toBeGreaterThanOrEqual(2)
-    for (const r of dated) expect(materialMaster(r.materialId)?.expiryApplicable).toBe(true)
+  it("dates stock only for materials where expiry applies", () => {
+    // Every dated inward movement is of an expiry-tracked material, and they exist.
+    const dated = bundle.ledger.filter((t) => t.expiryDate)
+    expect(dated.length).toBeGreaterThanOrEqual(3)
+    for (const t of dated) expect(materialMaster(t.materialId)?.expiryApplicable).toBe(true)
+    // Seeded SRF receipts carry the expiry stated on their PO.
+    const srf = bundle.ledger.filter((t) => t.type === "INCOMING" && t.materialId === "MAT-ALT-FUEL")
+    expect(srf.length).toBeGreaterThan(0)
+    for (const t of srf) expect(t.expiryDate).toBeTruthy()
   })
 
   it("classifies shelf life as Expired, Expiring Soon or Healthy", () => {

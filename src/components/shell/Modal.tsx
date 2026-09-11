@@ -32,7 +32,7 @@ export function Modal({
             <h2 className="text-[15px] font-bold text-ink">{title}</h2>
             {subtitle && <div className="font-mono text-[11.5px] text-ink-3">{subtitle}</div>}
           </div>
-          <button onClick={onClose} aria-label="Close" className="text-[20px] leading-none text-ink-3 hover:text-ink">
+          <button onClick={onClose} aria-label="Close" className="text-[20px] leading-none text-ink-2 hover:text-ink">
             ×
           </button>
         </header>

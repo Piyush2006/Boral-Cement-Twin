@@ -26,8 +26,8 @@ export type InventorySeed = {
   description?: string
   /** Lot reference, where the stock is lot-tracked. */
   lotId?: string
-  /** Only for materials where expiry applies. */
-  expiryDate?: string
+  /** Expiry-tracked materials: the expiry date of the opening batch. */
+  openingExpiry?: string
 }
 
 /** The grade each seeded balance is held against. */
@@ -73,6 +73,8 @@ export const INVENTORY_SEED: InventorySeed[] = [
     locationId: p.pileId,
     target: PILE_TARGET[p.id],
     ...limits(PILE_LIMITS[p.id]),
+    // SRF's opening stock is one dated batch, approaching expiry.
+    ...(p.id === "RM-AF-006" ? { openingExpiry: "2026-10-02T00:00:00.000Z" } : {}),
   })),
   { inventoryId: "FG-OPC-001", materialId: "MAT-CEMENT", gradeId: "GRD-OPC-43", locationId: "SL-01", target: 5120, ...limits([2000, 4500, 7000]) },
   { inventoryId: "FG-OPC-002", materialId: "MAT-CEMENT", gradeId: "GRD-OPC-43", locationId: "SL-02", target: 4980, ...limits([2000, 4500, 7000]) },
@@ -96,8 +98,8 @@ export const INVENTORY_SEED: InventorySeed[] = [
     target: 14,
     description: "Kiln inlet seal segments",
   },
-  // Expiry applies to lubricant, so it is held as two dated batches: one still
-  // in date, one already past it, giving the expiry workflow real stock to act on.
+  // Expiry applies to lubricant, so its opening stock is two dated batches: one
+  // still in date, one that reached its date on 8 Sept and was expired out.
   {
     inventoryId: "SP-LUB-001",
     ...limits([3, 8, 15]),
@@ -107,7 +109,7 @@ export const INVENTORY_SEED: InventorySeed[] = [
     target: 9,
     description: "Open gear lubricant drums",
     lotId: "LUB-2026-04",
-    expiryDate: "2026-11-30T00:00:00.000Z",
+    openingExpiry: "2026-11-30T00:00:00.000Z",
   },
   {
     inventoryId: "SP-LUB-002",
@@ -118,7 +120,7 @@ export const INVENTORY_SEED: InventorySeed[] = [
     target: 2,
     description: "Open gear lubricant drums — past expiry",
     lotId: "LUB-2025-08",
-    expiryDate: "2026-08-31T00:00:00.000Z",
+    openingExpiry: "2026-09-08T00:00:00.000Z",
   },
 ]
 

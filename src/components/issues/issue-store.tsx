@@ -23,7 +23,6 @@ import { seedBundle } from "@/lib/inventory/seed"
 import { FIRST_CONSUMPTION_NO, FIRST_ISSUE_NO, nextNumber } from "@/lib/issues/catalog"
 import {
   availability,
-  expiredOn,
   validateConsumption,
   validateIssue,
   validateIssueDraft,
@@ -95,10 +94,6 @@ function useIssueState() {
       if (!canWriteInventory) return { ok: false, error: "You do not have permission to issue material." }
       const check = validateIssue(record, issuedQty, stockAt(record.sourceInventoryId, record.issueId))
       if (!check.ok) return check
-      // It may have expired since the request was raised.
-      const source = recordOf(record.sourceInventoryId)
-      const expired = source ? expiredOn(source) : null
-      if (expired) return { ok: false, error: expired }
 
       let transactionId: string | undefined
       let at = new Date().toISOString()

@@ -23,7 +23,10 @@ import { InventoryDetailModal } from "./InventoryDetailModal"
 import { StatusBadge } from "./StatusBadge"
 import { PrimaryButton } from "./Table"
 import { TransactionsView } from "./TransactionsView"
+import { expiryDay } from "./Expiry"
 import { ExpiryView } from "./ExpiryView"
+import { daysToExpiry, type RecordExpiry } from "@/lib/inventory/expiry"
+import { useIssues } from "@/components/issues/issue-store"
 import { AddedBanner, useJustAdded } from "@/components/shell/just-added"
 
 type InventoryTab = "balances" | "transactions" | "expiry"
@@ -31,11 +34,12 @@ type InventoryTab = "balances" | "transactions" | "expiry"
 const TABS: Array<{ id: InventoryTab; label: string }> = [
   { id: "balances", label: "Inventory" },
   { id: "transactions", label: "Transactions" },
-  { id: "expiry", label: "Expiry" },
+  { id: "expiry", label: "Expiry Monitoring" },
 ]
 
 export function InventoryScreen() {
-  const { inventory, ledger, lastUpdated, canWriteInventory, inventoryTab: tab, setInventoryTab: setTab } = usePiles()
+  const { inventory, ledger, lastUpdated, canWriteInventory, inventoryTab: tab, setInventoryTab: setTab, setMode, expiryOf } = usePiles()
+  const { openTrace } = useIssues()
   const masters = useMasters()
   const storage = useMemo(() => masters.locations.filter((l) => holdsStock(l)), [masters.locations])
   const [createOpen, setCreateOpen] = useState(false)
@@ -49,13 +53,10 @@ export function InventoryScreen() {
   const added = useJustAdded()
 
   const active = useMemo(() => inventory.filter((r) => r.active), [inventory])
-  /** Expired balances still holding stock — shown on the Expiry tab. */
+  /** Balances holding stock that is approaching expiry — flagged on the Expiry Monitoring tab. */
   const expiredCount = useMemo(
-    () =>
-      active.filter(
-        (r) => r.quantity > 0 && r.expiryDate && materialEntry(r.materialId)?.expiryApplicable && new Date(r.expiryDate).getTime() < Date.now(),
-      ).length,
-    [active],
+    () => active.filter((r) => materialEntry(r.materialId)?.expiryApplicable && expiryOf(r.inventoryId).approachingQty > 0).length,
+    [active, expiryOf],
   )
   const counts = useMemo(
     () => ({
@@ -96,7 +97,7 @@ export function InventoryScreen() {
                   {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString([], { hour12: false })}`}
                 </>
               ) : tab === "expiry" ? (
-                <>Expiry management · shelf life, expiry dates and write-offs for expiry-tracked materials</>
+                <>Expiry monitoring · dated batches from the PO, for expiry-tracked materials only</>
               ) : (
                 <>Inventory transaction history · {ledger.length} transactions</>
               )}
@@ -124,7 +125,7 @@ export function InventoryScreen() {
                 <span className="ml-2 rounded-full bg-panel-2 px-1.5 py-[1px] text-[10px] font-bold text-ink-2">{ledger.length}</span>
               )}
               {t.id === "expiry" && expiredCount > 0 && (
-                <span className="ml-2 rounded-full bg-crit/15 px-1.5 py-[1px] text-[10px] font-bold text-ink ring-1 ring-crit/40" title="Expired balances holding stock">
+                <span className="ml-2 rounded-full bg-warn/15 px-1.5 py-[1px] text-[10px] font-bold text-ink ring-1 ring-warn/40" title="Balances holding stock approaching expiry">
                   {expiredCount}
                 </span>
               )}
@@ -135,7 +136,13 @@ export function InventoryScreen() {
         {tab === "transactions" ? (
           <TransactionsView onOpenInventory={(id) => setDetailId(id)} />
         ) : tab === "expiry" ? (
-          <ExpiryView onOpenInventory={(id) => setDetailId(id)} />
+          <ExpiryView
+            onOpenInventory={(id) => setDetailId(id)}
+            onTrace={(id) => {
+              openTrace(id)
+              setMode("issues")
+            }}
+          />
         ) : (
           <>
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -220,7 +227,13 @@ export function InventoryScreen() {
                 </thead>
                 <tbody>
                   {filtered.map((r) => (
-                    <InventoryRow key={r.inventoryId} record={r} added={added.is(r.inventoryId)} onView={() => setDetailId(r.inventoryId)} />
+                    <InventoryRow
+                      key={r.inventoryId}
+                      record={r}
+                      added={added.is(r.inventoryId)}
+                      expiry={materialEntry(r.materialId)?.expiryApplicable ? expiryOf(r.inventoryId) : undefined}
+                      onView={() => setDetailId(r.inventoryId)}
+                    />
                   ))}
                   {filtered.length === 0 && (
                     <tr>
@@ -268,7 +281,18 @@ export function InventoryScreen() {
   )
 }
 
-function InventoryRow({ record: r, onView, added }: { record: InventoryRecord; onView: () => void; added?: boolean }) {
+function InventoryRow({
+  record: r,
+  onView,
+  added,
+  expiry,
+}: {
+  record: InventoryRecord
+  onView: () => void
+  added?: boolean
+  /** Only for materials where expiry applies. */
+  expiry?: RecordExpiry
+}) {
   const m = materialEntry(r.materialId)
   const grade = gradeEntry(r.gradeId)
   const status = recordStatus(r)
@@ -286,11 +310,12 @@ function InventoryRow({ record: r, onView, added }: { record: InventoryRecord; o
       </Td>
       <Td>
         <span className="block font-mono text-ink">{r.inventoryId}</span>
-        {/* Expiry, where it applies — text, not colour alone. */}
-        {r.expiryDate && m?.expiryApplicable && (
+        {/* Expiry, only where it applies: the next batch to expire, in words. */}
+        {expiry?.nextExpiry && (
           <span className="block text-[11px] text-ink-3">
-            {new Date(r.expiryDate).getTime() < Date.now() ? "✕ Expired " : "Expires "}
-            {new Date(r.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+            {expiry.approachingQty > 0 ? "◷ " : ""}Next expiry{" "}
+            {expiryDay(expiry.nextExpiry)} ·{" "}
+            {daysToExpiry(expiry.nextExpiry, new Date())} days
           </span>
         )}
         {!r.active && <span className="block text-[10.5px] font-semibold uppercase tracking-wide text-ink-3">Archived</span>}

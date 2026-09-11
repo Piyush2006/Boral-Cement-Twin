@@ -13,7 +13,7 @@ import { isCounted, STATUS_LABEL, STATUS_ORDER, STATUS_TONE, nextAction, type In
 import { samplingLabel } from "@/lib/masters/types"
 import { gradeEntry } from "@/lib/inventory/catalog"
 import { locationEntry, materialEntry } from "@/lib/inventory/catalog"
-import { Modal } from "./StageModals"
+import { Modal, poExpiryLabel } from "./StageModals"
 import { PoQrCode } from "./QrScanner"
 
 export function IncomingDetailModal({
@@ -94,6 +94,7 @@ export function IncomingDetailModal({
           <Item label="Grade" value={gradeEntry(record.gradeId)?.name ?? "—"} />
           <Item label="Material Code" value={material?.code ?? "—"} mono />
           <Item label="Expected Quantity" value={`${record.expectedMt.toLocaleString()} ${material?.uom ?? "MT"}`} />
+          {material?.expiryApplicable && <Item label="Expiry (from PO)" value={poExpiryLabel({ expiryDate: record.poExpiryDate, shelfLifeDays: record.poShelfLifeDays })} />}
           <Item label="Expected Arrival" value={stamp(record.expectedArrival)} />
         </Grid>
       </Section>

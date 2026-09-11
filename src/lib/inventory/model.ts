@@ -57,8 +57,6 @@ export type InventoryRecord = {
   maxStock: number
   /** Lot / batch reference, only where the material is lot-tracked. */
   lotId?: string
-  /** Only for materials where expiry applies. */
-  expiryDate?: string
   /** Supplier's batch reference, as delivered. */
   batch?: string
   description?: string

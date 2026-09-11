@@ -145,7 +145,7 @@ describe("create inventory", () => {
   })
 
   it("refuses an expiry date on a material where expiry does not apply", () => {
-    expect(validateNewInventory({ ...input, expiryDate: "2027-01-01T00:00:00.000Z" }, inventory).ok).toBe(false)
+    expect(validateNewInventory({ ...input, quantity: 100, openingReference: "APP-1", openingExpiry: "2027-01-01T00:00:00.000Z" }, inventory).ok).toBe(false)
   })
 
   it("keeps one active balance per material, grade, location and lot", () => {

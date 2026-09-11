@@ -58,6 +58,9 @@ const UNIT_COST: Record<string, number> = {
   "MAT-SPARE-LUBRICANT": 15000,
 }
 
+/** Materials whose stock carries an expiry date. Demo configuration. */
+const EXPIRY_APPLIES = new Set(["MAT-ALT-FUEL"])
+
 /** Material code, taken from the pile that holds it where there is one. */
 const CODE_BY_MATERIAL = new Map(PILES.map((p) => [p.materialId as string, p.id.replace(/-\d+$/, "")]))
 
@@ -69,7 +72,9 @@ export const MATERIAL_SEED: MaterialMaster[] = [
     uom: m.uom,
     group: GROUP[m.materialId] ?? ("Raw Material" as MaterialGroup),
     description: DESCRIPTION[m.materialId],
-    expiryApplicable: false,
+    // Expiry applies to SRF — demo configuration following the client's
+    // example (PO-10250, Alternate Fuel — SRF, expiry 25-Oct-2026).
+    expiryApplicable: EXPIRY_APPLIES.has(m.materialId as string),
     lotTracking: LOT_TRACKED.has(m.materialId),
     unitCost: UNIT_COST[m.materialId],
     active: true,

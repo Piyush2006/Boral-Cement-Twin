@@ -122,7 +122,7 @@ export function traceBack(issue: IssueRecord, ctx: TraceContext): TraceStep[] {
     key: "inventory",
     label: "Inventory",
     value: issue.sourceInventoryId,
-    detail: `${material?.name ?? issue.materialId} · ${locationEntry(issue.sourceLocationId)?.name ?? issue.sourceLocationId}${expires(record?.expiryDate)}`,
+    detail: `${material?.name ?? issue.materialId} · ${locationEntry(issue.sourceLocationId)?.name ?? issue.sourceLocationId}`,
     state: "linked",
     followId: issue.sourceInventoryId,
   })

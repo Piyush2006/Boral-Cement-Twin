@@ -624,7 +624,7 @@ function MaterialModal({
   onClose: () => void
   onSave: (materials: MaterialMaster[]) => void
 }) {
-  const { canWriteInventory, inventory } = usePiles()
+  const { canWriteInventory, inventory, expiryOf } = usePiles()
   const [draft, setDraft] = useState<MaterialDraft>(draftOf(material))
   const [active, setActive] = useState(material.active)
   const [error, setError] = useState<string | null>(null)
@@ -640,10 +640,12 @@ function MaterialModal({
     }
     // Switching expiry off would hide dated stock from expiry tracking.
     if (material.expiryApplicable && !draft.expiryApplicable) {
-      const dated = inventory.filter((r) => r.active && r.materialId === material.materialId && r.quantity > 0 && r.expiryDate)
+      const dated = inventory.filter(
+        (r) => r.active && r.materialId === material.materialId && expiryOf(r.inventoryId).open.some((b) => b.expiryDate),
+      )
       if (dated.length) {
         return setError(
-          `${dated.map((r) => r.inventoryId).join(", ")} still ${dated.length === 1 ? "holds" : "hold"} dated stock. Write it off or use it before switching expiry off for ${material.name}.`,
+          `${dated.map((r) => r.inventoryId).join(", ")} still ${dated.length === 1 ? "holds" : "hold"} dated batches. Use them or let them expire before switching expiry off for ${material.name}.`,
         )
       }
     }

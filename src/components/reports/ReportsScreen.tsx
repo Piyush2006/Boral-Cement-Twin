@@ -20,7 +20,8 @@ import { useMemo, useState } from "react"
 
 import { useIncoming } from "@/components/incoming/incoming-store"
 import { StatusBadge } from "@/components/inventory/StatusBadge"
-import { ExpiryWriteOffModal, ShelfLifePill } from "@/components/inventory/Expiry"
+import { ExpiryPill, expiryDay } from "@/components/inventory/Expiry"
+import { batchStatus, daysToExpiry as batchDays, type ExpiryBatch } from "@/lib/inventory/expiry"
 import { UtilBar } from "@/components/inventory/LocationsView"
 import { Empty, LinkButton, Row, Table, Td, Th } from "@/components/inventory/Table"
 import { useIssues } from "@/components/issues/issue-store"
@@ -40,14 +41,12 @@ import {
   PERIOD_LABEL,
   balanceIdentity,
   costBy,
-  daysToExpiry,
   inventoryValueBy,
   locationStock,
   maintenanceConsumption,
   pendingQuality,
   periodRange,
   qualityKpis,
-  shelfLife,
   within,
   type Period,
 } from "@/lib/reports/insights"
@@ -78,7 +77,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2
 const toInput = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 
 export function ReportsScreen() {
-  const { inventory, ledger, setMode } = usePiles()
+  const { inventory, ledger, setMode, expiryOf } = usePiles()
   const { records: incoming, setOpenId: openIncoming } = useIncoming()
   const { records: issues, setOpenId: openIssue } = useIssues()
   const masters = useMasters()
@@ -93,7 +92,6 @@ export function ReportsScreen() {
     const t = new Date()
     return { from: toInput(new Date(t.getTime() - 14 * 86_400_000)), to: toInput(t) }
   })
-  const [writeOff, setWriteOff] = useState<InventoryRecord | null>(null)
   const range = useMemo(() => periodRange(period, now, custom), [period, now, custom])
 
   const active = useMemo(() => inventory.filter((r) => r.active), [inventory])
@@ -101,27 +99,28 @@ export function ReportsScreen() {
   /* ── derived figures ──────────────────────────────────────────────────── */
   const critical = useMemo(() => active.filter((r) => recordStatus(r) === "CRITICAL"), [active])
 
-  /** Usable inventory: active balances not past their expiry date. */
+  /** Usable inventory: active balances less any quantity past its expiry date. */
   const usableOf = useMemo(() => {
     const totals = new Map<string, number>()
     for (const r of active) {
-      if (r.expiryDate && new Date(r.expiryDate).getTime() < now.getTime()) continue
-      totals.set(r.materialId, (totals.get(r.materialId) ?? 0) + r.quantity)
+      const expiredDue = materialEntry(r.materialId)?.expiryApplicable ? expiryOf(r.inventoryId, now).duePendingQty : 0
+      totals.set(r.materialId, (totals.get(r.materialId) ?? 0) + r.quantity - expiredDue)
     }
     return (materialId: string) => totals.get(materialId) ?? 0
-  }, [active, now])
+  }, [active, now, expiryOf])
 
   const readiness = useMemo(() => PRODUCTION_PLANS.map((p) => planReadiness(p, usableOf)), [usableOf])
   const quality = useMemo(() => qualityKpis(incoming, range), [incoming, range])
   const pending = useMemo(() => pendingQuality(incoming), [incoming])
 
-  const expiryRows = useMemo(
+  /** Dated batches in stock, for materials where expiry applies — soonest first. */
+  const expiryRows: ExpiryBatch[] = useMemo(
     () =>
       active
-        .filter((r) => r.expiryDate && materialEntry(r.materialId)?.expiryApplicable)
-        .map((r) => ({ record: r, days: daysToExpiry(r.expiryDate!, now), state: shelfLife(r.expiryDate!, now) }))
-        .sort((a, b) => a.days - b.days),
-    [active, now],
+        .filter((r) => materialEntry(r.materialId)?.expiryApplicable)
+        .flatMap((r) => expiryOf(r.inventoryId, now).open)
+        .sort((a, b) => (a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity) - (b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity)),
+    [active, now, expiryOf],
   )
 
   const spares = useMemo(
@@ -377,40 +376,42 @@ export function ReportsScreen() {
         )}
 
         {section === "expiry" && (
-          <Panel title="Expiry" note="Only materials where expiry applies appear here. Expired stock is written off as its own EXPIRY transaction, never as consumption.">
+          <Panel
+            title="Expiry"
+            note="Only materials where expiry applies. Each batch's date comes from its PO; a batch that reaches it leaves by an EXPIRY transaction, counted as a loss, never as consumption."
+          >
             <Table
               head={
                 <>
                   <Th>Material</Th>
                   <Th>Inventory ID</Th>
-                  <Th>Location</Th>
-                  <Th className="text-right">Expiry Quantity</Th>
+                  <Th>PO / GRN</Th>
+                  <Th className="text-right">Quantity</Th>
                   <Th>Expiry Date</Th>
                   <Th className="text-right">Days to Expiry</Th>
-                  <Th>Shelf Life</Th>
-                  <Th className="text-right">Actions</Th>
+                  <Th>Status</Th>
                 </>
               }
               empty={expiryRows.length === 0 ? <Empty>No stock of an expiry-tracked material is held.</Empty> : undefined}
             >
-              {expiryRows.map(({ record: r, days, state }) => (
-                <Row key={r.inventoryId}>
+              {expiryRows.map((b) => (
+                <Row key={b.batchId}>
                   <Td>
-                    <span className="block text-ink">{materialEntry(r.materialId)?.name}</span>
-                    <span className="block text-[11px] text-ink-3">{r.lotId ?? r.batch ?? ""}</span>
+                    <span className="block text-ink">{materialEntry(b.materialId)?.name}</span>
+                    <span className="block text-[11px] text-ink-3">{locationName(b.locationId)}</span>
                   </Td>
-                  <Td className="font-mono text-ink">{r.inventoryId}</Td>
-                  <Td className="text-ink-2">{locationName(r.locationId)}</Td>
+                  <Td className="font-mono text-ink">{b.inventoryId}</Td>
+                  <Td className="font-mono text-ink-2">
+                    {b.poNumber ?? (b.source === "OPENING" ? "Opening balance" : "—")}
+                    {b.grnNo && <span className="block text-[11px] text-ink-3">{b.grnNo}</span>}
+                  </Td>
                   <Td className="text-right font-mono text-ink">
-                    {fmt(r.quantity)} {r.uom}
+                    {fmt(b.remaining)} {b.uom}
                   </Td>
-                  <Td className="text-ink-2">{day(r.expiryDate!)}</Td>
-                  <Td className="text-right font-mono text-ink-2">{days}</Td>
+                  <Td className="text-ink-2">{b.expiryDate ? expiryDay(b.expiryDate) : "Not on PO"}</Td>
+                  <Td className="text-right font-mono text-ink-2">{b.expiryDate ? batchDays(b.expiryDate, now) : "—"}</Td>
                   <Td>
-                    <ShelfLifePill state={state} />
-                  </Td>
-                  <Td className="text-right">
-                    {state === "EXPIRED" && r.quantity > 0 ? <LinkButton onClick={() => setWriteOff(r)}>Write Off</LinkButton> : <span className="text-ink-3">—</span>}
+                    <ExpiryPill status={batchStatus(b, now)} />
                   </Td>
                 </Row>
               ))}
@@ -468,7 +469,6 @@ export function ReportsScreen() {
         {section === "movements" && <MovementsSection identity={identity} issues={issues} range={range} periodNote={periodNote} adjustments={adjustments} />}
       </div>
 
-      {writeOff && <ExpiryWriteOffModal record={writeOff} onClose={() => setWriteOff(null)} />}
     </div>
   )
 }

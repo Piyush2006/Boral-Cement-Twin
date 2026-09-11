@@ -72,7 +72,7 @@ export function AddedBanner({ added }: { added: JustAdded }) {
         ✓
       </span>
       <span className="flex-1">{added.message}</span>
-      <button onClick={added.clear} aria-label="Dismiss" className="px-1 text-[15px] leading-none text-ink-3 hover:text-ink">
+      <button onClick={added.clear} aria-label="Dismiss" className="px-1 text-[15px] leading-none text-ink-2 hover:text-ink">
         ×
       </button>
     </div>

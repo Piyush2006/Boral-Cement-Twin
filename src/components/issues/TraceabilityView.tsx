@@ -18,6 +18,7 @@ import type { InventoryTrace, LinkState, TraceResult, TraceStep } from "@/lib/is
 import { ISSUE_STATUS_LABEL, ISSUE_STATUS_TONE, inventoryTransactionId, type IssueRecord } from "@/lib/issues/types"
 import { toneText } from "@/lib/theme/tone"
 import { useIssues } from "./issue-store"
+import { usePiles } from "@/components/shell/pile-store"
 
 const STATE_LABEL: Record<LinkState, string | null> = {
   linked: null,
@@ -308,6 +309,8 @@ function InventoryTraceView({ trace, onFollow }: { trace: InventoryTrace; onFoll
   const { record, receipts, adjustmentsIn, issues, adjustmentsOut } = trace
   const material = materialEntry(record.materialId)
   const fmt = (n: number) => Math.round(n).toLocaleString()
+  const { expiryOf } = usePiles()
+  const expiry = expiryOf(record.inventoryId)
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -323,11 +326,36 @@ function InventoryTraceView({ trace, onFollow }: { trace: InventoryTrace; onFoll
       <div className="mb-3 text-[11.5px] text-ink-3">
         Min {fmt(recordLimits(record).minStock)} · Max {fmt(recordLimits(record).maxStock)} {record.uom}
         {record.batch ? ` · Batch ${record.batch}` : ""}
-        {record.expiryDate
-          ? ` · ${new Date(record.expiryDate).getTime() < Date.now() ? "Expired" : "Expires"} ${new Date(record.expiryDate).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}`
-          : ""}
         {!record.active ? " · Archived" : ""}
       </div>
+      {/* Expiry-tracked stock: each dated batch in stock, back to its PO / GRN. */}
+      {materialEntry(record.materialId)?.expiryApplicable && (
+        <div className="mb-3">
+          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">Dated batches in stock</div>
+          {expiry.open.length === 0 ? (
+            <p className="text-[12px] text-ink-3">No stock is held.</p>
+          ) : (
+            <ul className="divide-y divide-line rounded-lg ring-1 ring-line">
+              {expiry.open.map((b) => (
+                <li key={b.batchId} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-2 text-[12px]">
+                  <span className="font-mono text-ink">{fmt(b.remaining)} {b.uom}</span>
+                  <span className="text-ink-2">
+                    {b.expiryDate ? `expires ${new Date(b.expiryDate).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })}` : "no expiry date"}
+                  </span>
+                  {b.poNumber && (
+                    <button onClick={() => onFollow(b.poNumber!)} className="font-mono text-accent hover:underline">
+                      {b.poNumber}
+                    </button>
+                  )}
+                  {b.grnNo && <span className="font-mono text-ink-3">{b.grnNo}</span>}
+                  {b.lotId && <span className="font-mono text-ink-3">{b.lotId}</span>}
+                  {!b.poNumber && <span className="text-ink-3">{b.source === "OPENING" ? "Opening balance" : "Adjustment"}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">Where did this stock come from?</div>
       {receipts.length === 0 && adjustmentsIn.length === 0 && <p className="mb-3 text-[12px] text-ink-3">No receipts or adjustments in.</p>}

@@ -17,6 +17,7 @@ import { usePiles } from "@/components/shell/pile-store"
 import { qualityParameters, resolvePurchaseOrder, sampleRequiredFor } from "@/lib/incoming/catalog"
 import { gradeEntry, materialEntry } from "@/lib/inventory/catalog"
 import { createLot } from "@/lib/inventory/lots"
+import { expiryFromPo } from "@/lib/inventory/expiry"
 import { readingPasses } from "@/lib/masters/types"
 import type { IncomingRecord, IncomingStatus, QualityReading, QualityResult } from "@/lib/incoming/types"
 import { seedBundle } from "@/lib/inventory/seed"
@@ -37,7 +38,7 @@ export type IdentifyInput = {
 }
 
 function useIncomingState() {
-  const { postMovement, canWriteInventory, recordOf, setExpiryDate } = usePiles()
+  const { postMovement, canWriteInventory, recordOf } = usePiles()
   const [records, setRecords] = useState<IncomingRecord[]>(() => seedBundle().incoming)
   const [openId, setOpenId] = useState<string | null>(null)
 
@@ -103,6 +104,8 @@ function useIncomingState() {
         supplier: po.supplier,
         expectedMt: po.expectedMt,
         expectedArrival: po.expectedArrival,
+        poExpiryDate: po.expiryDate,
+        poShelfLifeDays: po.shelfLifeDays,
         destinationLocationId: po.destinationLocationId,
         receivingInventoryId: input.receivingInventoryId,
         vehicleRef: input.vehicleRef.trim() || undefined,
@@ -236,25 +239,22 @@ function useIncomingState() {
         return { ok: false, error: `${material?.name ?? "This material"} is not lot-tracked, so it takes no lot reference.` }
       }
 
-      // Expiry — only where the material says it applies. The batch's date is
-      // required, an already-expired batch is not received, and a balance keeps
-      // one shelf life: dated stock is never blended into stock of another date.
+      // Expiry — only where the material says it applies. It comes from the PO
+      // (the expiry date it states, or its shelf life counted from today) and
+      // travels with the receipt into inventory as a dated batch — nobody types
+      // it again. Only where the PO carries neither may the date printed on the
+      // delivery docket be recorded here; without either the batch is received
+      // and shows as "No Expiry Date" in monitoring.
       const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
-      const dayKey = (iso: string) => new Date(iso).toISOString().slice(0, 10)
       let expiryDate: string | undefined
       if (material?.expiryApplicable) {
-        if (!input.expiryDate || !Number.isFinite(new Date(input.expiryDate).getTime())) {
-          return { ok: false, error: `Expiry applies to ${material.name}. Enter the expiry date of the batch received.` }
+        expiryDate = expiryFromPo({ expiryDate: record.poExpiryDate, shelfLifeDays: record.poShelfLifeDays }, new Date())
+        if (!expiryDate && input.expiryDate) {
+          if (!Number.isFinite(new Date(input.expiryDate).getTime())) return { ok: false, error: "The docket expiry date is not a valid date." }
+          expiryDate = new Date(input.expiryDate).toISOString()
         }
-        expiryDate = new Date(input.expiryDate).toISOString()
-        if (new Date(expiryDate).getTime() < Date.now()) {
+        if (expiryDate && new Date(expiryDate).getTime() <= Date.now()) {
           return { ok: false, error: `This batch expired on ${day(expiryDate)}. Expired material is not received into inventory.` }
-        }
-        if (balance && balance.quantity > 0 && balance.expiryDate && dayKey(balance.expiryDate) !== dayKey(expiryDate)) {
-          return {
-            ok: false,
-            error: `${balance.inventoryId} holds ${Math.round(balance.quantity).toLocaleString()} ${balance.uom} expiring ${day(balance.expiryDate)}; this batch expires ${day(expiryDate)}. Receive it into an empty record or create a new inventory record for it, so each shelf life stays traceable.`,
-          }
         }
       } else if (input.expiryDate) {
         return { ok: false, error: `Expiry does not apply to ${material?.name ?? "this material"}.` }
@@ -302,6 +302,7 @@ function useIncomingState() {
         reference: record.vehicleRef,
         lotId: lot?.lotId,
         gradeId: gradeId || undefined,
+        expiryDate,
         links: {
           poNumber: record.poNumber,
           gateEntryNo: record.gateEntryNo,
@@ -312,14 +313,6 @@ function useIncomingState() {
         },
       })
       if (!posted.ok) return posted
-
-      // The balance now carries the batch's shelf life (it was empty, undated or
-      // already this date) and, where it was empty, the batch's lot.
-      const wasEmpty = !balance || balance.quantity === 0
-      const newLot = wasEmpty ? lot?.lotId : undefined
-      if (expiryDate && (!balance?.expiryDate || dayKey(balance.expiryDate) !== dayKey(expiryDate) || (newLot && newLot !== balance.lotId))) {
-        setExpiryDate(input.receivingInventoryId, expiryDate, `Received with ${record.incomingId} (${record.poNumber})`, newLot)
-      }
 
       const txn = posted.value
       patch(incomingId, (r) => ({
@@ -352,7 +345,7 @@ function useIncomingState() {
       }))
       return { ok: true, value: { transactionId: txn.txnId, lotId: lot?.lotId } }
     },
-    [records, canWriteInventory, checkReceiving, postMovement, patch, recordOf, setExpiryDate],
+    [records, canWriteInventory, checkReceiving, postMovement, patch, recordOf],
   )
 
   const open = useMemo(() => records.find((r) => r.incomingId === openId) ?? null, [records, openId])
