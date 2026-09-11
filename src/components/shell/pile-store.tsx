@@ -413,7 +413,7 @@ function useStore() {
    * and the reason go into the record's audit trail.
    */
   const setExpiryDate = useCallback(
-    (inventoryId: string, expiryDate: string | null, reason: string): Result<true> => {
+    (inventoryId: string, expiryDate: string | null, reason: string, lotId?: string): Result<true> => {
       if (!canWriteInventory) return { ok: false, error: "You do not have permission to change expiry dates." }
       const record = recordOf(inventoryId)
       if (!record) return { ok: false, error: "Inventory record not found." }
@@ -423,19 +423,24 @@ function useStore() {
       if (!expiryDate || !Number.isFinite(new Date(expiryDate).getTime())) return { ok: false, error: "Enter a valid expiry date." }
       if (!reason.trim()) return { ok: false, error: "Enter a reason for the expiry date." }
       const next = new Date(expiryDate).toISOString()
-      if (record.expiryDate && new Date(record.expiryDate).toISOString() === next) return { ok: false, error: "That is already the expiry date." }
+      const relot = Boolean(lotId && lotId !== record.lotId)
+      if (record.expiryDate && new Date(record.expiryDate).toISOString() === next && !relot) return { ok: false, error: "That is already the expiry date." }
       const day = (iso: string) => new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" })
       const at = new Date().toISOString()
       patchRecord(inventoryId, (r) => ({
         ...r,
         expiryDate: next,
+        // A dated balance holds one batch: when a new batch arrives, it names that batch.
+        lotId: relot ? lotId : r.lotId,
         updatedAt: at,
         audit: [
           ...r.audit,
           {
             at,
             by: ACTOR,
-            action: `${r.expiryDate ? `Expiry date changed ${day(r.expiryDate)} → ${day(next)}` : `Expiry date set to ${day(next)}`} — ${reason.trim()}`,
+            action: `${r.expiryDate ? `Expiry date changed ${day(r.expiryDate)} → ${day(next)}` : `Expiry date set to ${day(next)}`}${
+              relot ? `, lot ${r.lotId ?? "none"} → ${lotId}` : ""
+            } — ${reason.trim()}`,
           },
         ],
       }))

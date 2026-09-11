@@ -313,9 +313,12 @@ function useIncomingState() {
       })
       if (!posted.ok) return posted
 
-      // The balance now carries the batch's shelf life (it was empty, undated or already this date).
-      if (expiryDate && (!balance?.expiryDate || dayKey(balance.expiryDate) !== dayKey(expiryDate))) {
-        setExpiryDate(input.receivingInventoryId, expiryDate, `Received with ${record.incomingId} (${record.poNumber})`)
+      // The balance now carries the batch's shelf life (it was empty, undated or
+      // already this date) and, where it was empty, the batch's lot.
+      const wasEmpty = !balance || balance.quantity === 0
+      const newLot = wasEmpty ? lot?.lotId : undefined
+      if (expiryDate && (!balance?.expiryDate || dayKey(balance.expiryDate) !== dayKey(expiryDate) || (newLot && newLot !== balance.lotId))) {
+        setExpiryDate(input.receivingInventoryId, expiryDate, `Received with ${record.incomingId} (${record.poNumber})`, newLot)
       }
 
       const txn = posted.value

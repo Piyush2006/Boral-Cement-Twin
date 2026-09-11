@@ -236,10 +236,16 @@ describe("data stays in sync across Inventory, Incoming, Issue & Consumption, th
     act(() => void expect(receive("2027-03-31T00:00:00.000Z").ok).toBe(true))
     expect(rec("SP-LUB-002").quantity).toBe(12)
     expect(rec("SP-LUB-002").expiryDate).toBe("2027-03-31T00:00:00.000Z")
-    expect(rec("SP-LUB-002").audit.at(-1)!.action).toMatch(new RegExp(`Expiry date changed 31 Aug 2026 → 31 Mar 2027 — Received with ${incomingId}`))
     const delivery = app().incoming.records.find((r) => r.incomingId === incomingId)!
     expect(delivery.receipt?.expiryDate).toBe("2027-03-31T00:00:00.000Z")
-    expect(allLots().find((l) => l.incomingId === incomingId)?.expiryDate).toBe("2027-03-31T00:00:00.000Z")
+    const newLot = allLots().find((l) => l.incomingId === incomingId)!
+    expect(newLot.expiryDate).toBe("2027-03-31T00:00:00.000Z")
+    // The emptied record now names the batch it holds, not the one written off.
+    expect(rec("SP-LUB-002").lotId).toBe(newLot.lotId)
+    expect(delivery.receipt?.lotId).toBe(newLot.lotId)
+    expect(rec("SP-LUB-002").audit.at(-1)!.action).toMatch(
+      new RegExp(`Expiry date changed 31 Aug 2026 → 31 Mar 2027, lot LUB-2025-08 → ${newLot.lotId} — Received with ${incomingId}`),
+    )
     assertInSync(app(), "lubricant received")
 
     // A material where expiry does not apply refuses an expiry date.
